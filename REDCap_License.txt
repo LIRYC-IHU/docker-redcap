@@ -1,0 +1,8 @@
+REDCap code is available only through Vanderbilt University.
+
+Possession and use of REDCap code and workflow methodology is strictly 
+limited to institutions and organizations who have finalized an End-User 
+License Agreement with Vanderbilt University.
+
+You may not distribute the code but are encouraged to contact 
+redcap@vumc.org for additional details.

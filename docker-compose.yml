@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # PHP/Apache container for REDCap
+  php:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: redcap-php
+    ports:
+      - "80:80"
+    environment:
+      MYSQL_HOST: mariadb
+      MYSQL_USER: redcap_user
+      MYSQL_PASSWORD: redcap_password
+      MYSQL_DATABASE: redcap_db
+    depends_on:
+      - mariadb
+    volumes:
+      - ./redcap15.9.3/redcap:/var/www/html
+    networks:
+      - redcap-network
+    restart: unless-stopped
+
+  # MariaDB container for the database
+  mariadb:
+    image: mariadb:latest
+    container_name: redcap-mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_USER: redcap_user
+      MYSQL_PASSWORD: redcap_password
+      MYSQL_DATABASE: redcap_db
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    networks:
+      - redcap-network
+    restart: unless-stopped
+
+  # CloudBeaver for database management
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:latest
+    container_name: redcap-cloudbeaver
+    ports:
+      - "8978:8978"
+    environment:
+      CB_SERVER_MAX_CONNECTIONS: 20
+    volumes:
+      - cloudbeaver_data:/opt/cloudbeaver/workspace
+    depends_on:
+      - mariadb
+    networks:
+      - redcap-network
+    restart: unless-stopped
+
+volumes:
+  mariadb_data:
+  cloudbeaver_data:
+
+networks:
+  redcap-network:
+    driver: bridge
