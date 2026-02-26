@@ -22,9 +22,6 @@ services:
       - mariadb
     volumes:
       - user_uploads:/var/user_uploads
-      - ./girder_uploader_v1.0.0:/var/www/html/modules/girder_uploader_v1.0.0
-      - ./hello_world_v0.0.0:/var/www/html/modules/hello_world_v0.0.0
-      - $TLS_CERT/rootCA.pem:/etc/ssl/certs/mkcert-ca.pem:ro
     networks:
       - redcap-network
     restart: unless-stopped
@@ -35,14 +32,29 @@ services:
     container_name: redcap-mariadb
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_USER: ${MYSQL_USER:-redcap_user}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-redcap_password}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-redcap_db}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
     volumes:
       - mariadb_data:/var/lib/mysql
     networks:
       - redcap-network
     command: ["mariadbd", "--max-allowed-packet=1G", "--optimizer_switch=rowid_filter=OFF"]
+    restart: unless-stopped
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: redcap-phpmyadmin
+    ports: ["8082:80"]
+    environment:
+      PMA_HOST: mariadb
+      PMA_USER: ${MYSQL_USER:-redcap_user}
+      PMA_PASSWORD: ${MYSQL_PASSWORD:-redcap_password}
+      PMA_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-redcap_password}
+    depends_on:
+      - mariadb
+    networks:
+      - redcap-network
     restart: unless-stopped
 
 volumes:

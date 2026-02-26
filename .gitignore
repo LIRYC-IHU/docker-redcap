@@ -1,1 +1,11 @@
 redcap/**
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
+.venv/
+**/__pycache__/
+*.pyc
+.env
+ihu.env

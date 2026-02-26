@@ -1,0 +1,87 @@
+{
+    "name": "Girder Uploader",
+    "namespace": "ExternalModules\\GirderUploaderModule",
+    "description": "Upload files to Girder with Chunked Upload.",
+    "framework-version": 12,
+    "authors": [
+        {
+            "name": "Josselin Duchateau",
+            "email": "josselin.duchateau@ihu-liryc.fr",
+            "institution": "IHU Liryc - University of Bordeaux"
+        }
+    ],
+    "auth-ajax-actions": [
+        "init-batch",
+        "upload-file"
+    ],
+    "project-settings": [
+        {
+            "key": "girder-backchannel-api-url",
+            "name": "<b>Girder Backchannel API URL</b> - ex: https://girder.your-server.com/api/v1",
+            "type": "text",
+            "required": true
+        },
+        {
+            "key": "girder-frontchannel-base-url",
+            "name": "<b>Girder Frontchannel Base URL</b> - ex: https://girder.your-server.com",
+            "type": "text",
+            "required": true
+        },
+        {
+            "key": "api-key",
+            "name": "<b>Girder API Key</b> - generate an API key for your user in Girder and paste it here",
+            "type": "text",
+            "required": true
+        },
+        {
+            "key": "root-collection-id",
+            "name": "<b>Root Collection ID</b> - uploaded files will be stored in Girder under this collection",
+            "type": "text",
+            "required": true
+        },
+        {
+            "key": "chunk-size",
+            "name": "<b>Chunk Size (in bytes)</b> - default is 10MB",
+            "type": "text",
+            "default": "10485760",
+            "required": false
+        },
+        {
+            "key": "max-retries",
+            "name": "<b>Max Retries</b> - default is 3",
+            "type": "text",
+            "default": "3",
+            "required": false
+        },
+        {
+            "key": "retry-delay",
+            "name": "<b>Retry Delay (in milliseconds)</b> - default is 1000ms",
+            "type": "text",
+            "default": "1000",
+            "required": false
+        },
+        {
+            "key": "deidentify-before-send",
+            "name": "<b>Deidentify Before Send</b> - when enabled, files are deidentified client-side before upload (DICOM only)",
+            "type": "checkbox",
+            "required": false
+        }
+    ],
+    "action-tags": [
+        {
+            "tag": "@GIRDER_UPLOAD",
+            "description": "Transform this field into a Drag & Drop area for Girder.",
+            "allowed_field_types": ["textarea"]
+        }
+    ],
+    "links": {
+        "project": [
+            {
+                "name": "Girder Collection",
+                "icon": "fas fa-folder-open",
+                "url": "http://COLLECTION_ID",
+                "show-header-and-footer": true
+            }
+        ]
+    }
+}

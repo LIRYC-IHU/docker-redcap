@@ -1,0 +1,15 @@
+{
+  "name": "dicom_deid",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "dicom_deid_bg.wasm",
+    "dicom_deid.js",
+    "dicom_deid.d.ts"
+  ],
+  "main": "dicom_deid.js",
+  "types": "dicom_deid.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
