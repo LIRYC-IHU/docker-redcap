@@ -10,14 +10,19 @@ class GirderUploaderModule extends AbstractExternalModule
     {
         $settings = $this->loadSettings();
 
-        if (is_array($link) && isset($link['name']) && is_string($link['name']) && $link['name'] === 'Girder Collection') {
+        if (is_array($link) && ($link['name'] ?? '') === 'Girder Collection') {
             if (!empty($settings['girderFrontchannelBaseUrl']) && !empty($settings['rootCollectionId'])) {
-                $collectionUrl = rtrim((string) $settings['girderFrontchannelBaseUrl'], '/') . '/#collection/' . (string) $settings['rootCollectionId'];
-                $link['url'] = $collectionUrl;
+                $base = rtrim((string) $settings['girderFrontchannelBaseUrl'], '/');
+                $id = rawurlencode((string) $settings['rootCollectionId']);
+
+                // trailing ? makes appended params become hash-query suffix
+                // e.g. #collection/<id>?&pid=16
+                $link['url'] = "{$base}/#collection/{$id}?";
             } else {
                 $link['url'] = '#';
             }
         }
+
         return $link;
     }
 
@@ -49,6 +54,7 @@ class GirderUploaderModule extends AbstractExternalModule
                 'maxRetries' => (int) $settings['maxRetries'],
                 'retryDelay' => (int) $settings['retryDelay'],
                 'deidentifyBeforeSend' => (bool) $settings['deidentifyBeforeSend'],
+                'preserveUploadFolderArchitecture' => (bool) $settings['preserveUploadFolderArchitecture'],
                 'deidentifyWorkerUrl' => $this->getUrl('js/deidentify-worker.js', true),
             ],
         ];
@@ -154,6 +160,9 @@ class GirderUploaderModule extends AbstractExternalModule
             $dagFolder = $this->ensureFolder($settings, 'collection', (string) $settings['rootCollectionId'], $dagName);
             $recordFolder = $this->ensureFolder($settings, 'folder', (string) $dagFolder['_id'], $recordId);
             $fieldFolder = $this->ensureFolder($settings, 'folder', (string) $recordFolder['_id'], $fieldFolderName);
+            $dicomItemCacheByFolderId = [];
+            $dicomFlatItemCacheBySourceFolder = [];
+            $preserveUploadFolderArchitecture = !empty($settings['preserveUploadFolderArchitecture']);
 
             $uploads = [];
             foreach ($files as $index => $fileInfo) {
@@ -170,6 +179,17 @@ class GirderUploaderModule extends AbstractExternalModule
                     throw new \Exception('Invalid file payload for batch item ' . $index . '.');
                 }
 
+                $isDicom = null;
+                if (array_key_exists('isDicom', $fileInfo)) {
+                    $rawIsDicom = $fileInfo['isDicom'];
+                    if (is_bool($rawIsDicom)) {
+                        $isDicom = $rawIsDicom;
+                    } else {
+                        $normalized = strtolower(trim((string) $rawIsDicom));
+                        $isDicom = in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+                    }
+                }
+
                 $uploads[] = $this->createUploadForRelativePath(
                     $settings,
                     $fieldFolder,
@@ -179,7 +199,11 @@ class GirderUploaderModule extends AbstractExternalModule
                     $mimeType,
                     $dagName,
                     $recordId,
-                    $repeatInstance
+                    $repeatInstance,
+                    $dicomItemCacheByFolderId,
+                    $isDicom,
+                    $preserveUploadFolderArchitecture,
+                    $dicomFlatItemCacheBySourceFolder
                 );
             }
 
@@ -320,6 +344,7 @@ class GirderUploaderModule extends AbstractExternalModule
             'maxRetries' => $this->readIntSetting('max-retries', 3),
             'retryDelay' => $this->readIntSetting('retry-delay', 1000),
             'deidentifyBeforeSend' => $this->readBoolSetting('deidentify-before-send', false),
+            'preserveUploadFolderArchitecture' => $this->readBoolSettingTreatEmptyAsFalse('preserve-upload-folder-architecture', true),
         ];
         return $settings;
     }
@@ -496,18 +521,64 @@ class GirderUploaderModule extends AbstractExternalModule
         return $lastFileEntity;
     }
 
-    private function createUploadForRelativePath($settings, $fieldFolder, $relativePath, $fileName, $fileSize, $mimeType, $dagName, $recordId, $repeatInstance)
+    private function createUploadForRelativePath(
+        $settings,
+        $fieldFolder,
+        $relativePath,
+        $fileName,
+        $fileSize,
+        $mimeType,
+        $dagName,
+        $recordId,
+        $repeatInstance,
+        &$dicomItemCacheByFolderId = [],
+        $isDicomHint = null,
+        $preserveUploadFolderArchitecture = true,
+        &$dicomFlatItemCacheBySourceFolder = []
+    )
     {
         $pathParts = $this->splitRelativePath($relativePath);
         $leafFileName = $this->sanitizePathPart((string) end($pathParts), $fileName);
         $subfolders = array_slice($pathParts, 0, max(0, count($pathParts) - 1));
+        $sourceFolderKey = empty($subfolders) ? '.' : implode('/', $subfolders);
+        $isDicom = is_bool($isDicomHint) ? $isDicomHint : $this->isDicomFile($leafFileName, $mimeType);
 
         $targetFolder = $fieldFolder;
-        foreach ($subfolders as $segment) {
-            $targetFolder = $this->ensureFolder($settings, 'folder', (string) $targetFolder['_id'], $segment);
+        if ($preserveUploadFolderArchitecture || !$isDicom) {
+            foreach ($subfolders as $segment) {
+                $targetFolder = $this->ensureFolder($settings, 'folder', (string) $targetFolder['_id'], $segment);
+            }
         }
 
-        $item = $this->ensureItem($settings, (string) $targetFolder['_id'], $leafFileName);
+        $targetFolderId = (string) $targetFolder['_id'];
+
+        if ($isDicom) {
+            if (!is_array($dicomItemCacheByFolderId)) {
+                $dicomItemCacheByFolderId = [];
+            }
+            if (!is_array($dicomFlatItemCacheBySourceFolder)) {
+                $dicomFlatItemCacheBySourceFolder = [];
+            }
+
+            if ($preserveUploadFolderArchitecture) {
+                if (!isset($dicomItemCacheByFolderId[$targetFolderId]) || !is_array($dicomItemCacheByFolderId[$targetFolderId])) {
+                    $dicomItemCacheByFolderId[$targetFolderId] = $this->ensureItem($settings, $targetFolderId, 'DICOM_DATA');
+                }
+                $item = $dicomItemCacheByFolderId[$targetFolderId];
+            } else {
+                $flatTargetFolderId = (string) $fieldFolder['_id'];
+                if (!isset($dicomFlatItemCacheBySourceFolder[$sourceFolderKey]) || !is_array($dicomFlatItemCacheBySourceFolder[$sourceFolderKey])) {
+                    $nextIndex = count($dicomFlatItemCacheBySourceFolder) + 1;
+                    $dicomFlatItemCacheBySourceFolder[$sourceFolderKey] = $this->ensureItem($settings, $flatTargetFolderId, 'DICOM_DATA_' . $nextIndex);
+                }
+                $targetFolderId = $flatTargetFolderId;
+                $targetFolder = $fieldFolder;
+                $item = $dicomFlatItemCacheBySourceFolder[$sourceFolderKey];
+            }
+        } else {
+            $item = $this->ensureItem($settings, $targetFolderId, $leafFileName);
+        }
+
         $upload = $this->initUpload($settings, (string) $item['_id'], $leafFileName, $fileSize, $mimeType);
 
         return [
@@ -523,6 +594,26 @@ class GirderUploaderModule extends AbstractExternalModule
             'girderFrontchannelBaseUrl' => (string) $settings['girderFrontchannelBaseUrl'],
             'rootCollectionId' => (string) $settings['rootCollectionId'],
         ];
+    }
+
+    private function isDicomFile($fileName, $mimeType)
+    {
+        $fileName = strtolower(trim((string) $fileName));
+        $mimeType = strtolower(trim((string) $mimeType));
+
+        if ($mimeType !== '' && (strpos($mimeType, 'dicom') !== false || $mimeType === 'application/dicom')) {
+            return true;
+        }
+
+        if ($fileName === '') {
+            return false;
+        }
+
+        if (substr($fileName, -4) === '.dcm') {
+            return true;
+        }
+
+        return false;
     }
 
     private function girderRequestJson($settings, $method, $pathWithQuery, $body, $extraHeaders = [])
@@ -857,6 +948,33 @@ class GirderUploaderModule extends AbstractExternalModule
             return true;
         }
         if (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
+            return false;
+        }
+
+        return (bool) $default;
+    }
+
+    private function readBoolSettingTreatEmptyAsFalse($key, $default = false)
+    {
+        $value = $this->getProjectSetting($key);
+        if (is_bool($value)) {
+            return $value;
+        }
+        if ($value === null) {
+            return (bool) $default;
+        }
+        if ($value === '') {
+            return false;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+            return true;
+        }
+        if (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
+            return false;
+        }
+        if ($normalized === '') {
             return false;
         }
 

@@ -40,6 +40,9 @@ pub fn deidentify(input_bytes: &[u8], record_id: String, patient_name: String) -
         .tag_action(tags::PATIENT_NAME, Action::Replace {
             value: patient_name.into(),
         })
+        .tag_action(tags::DEIDENTIFICATION_METHOD, Action::Replace {
+            value: "IHU LIRYC REDCAP PLUGIN".into(),
+        })
         .build();
 
     let processor = DefaultProcessor::new(config);

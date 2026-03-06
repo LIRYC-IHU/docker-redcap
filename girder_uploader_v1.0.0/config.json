@@ -65,6 +65,13 @@
             "name": "<b>Deidentify Before Send</b> - when enabled, files are deidentified client-side before upload (DICOM only)",
             "type": "checkbox",
             "required": false
+        },
+        {
+            "key": "preserve-upload-folder-architecture",
+            "name": "<b>Preserve Upload Folder Architecture</b> - when disabled, DICOM files are stored at field root and grouped by source folder",
+            "type": "checkbox",
+            "default": "1",
+            "required": false
         }
     ],
     "action-tags": [

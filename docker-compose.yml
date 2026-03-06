@@ -22,9 +22,8 @@ services:
       - mariadb
     volumes:
       - user_uploads:/var/user_uploads
-      - ./girder_uploader_v1.0.0:/var/www/html/modules/girder_uploader_v1.0.0
-      - ./hello_world_v0.0.0:/var/www/html/modules/hello_world_v0.0.0
-      - $TLS_CERT/rootCA.pem:/etc/ssl/certs/mkcert-ca.pem:ro
+      #- ${REDCAP_DIR}:/var/www/html
+      # - ./girder_uploader_v1.0.0:/var/www/html/modules/girder_uploader_v1.0.0
     networks:
       - redcap-network
     restart: unless-stopped

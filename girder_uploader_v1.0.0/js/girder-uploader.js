@@ -142,6 +142,21 @@
         return name.endsWith('.zip') || type.indexOf('zip') >= 0;
     }
 
+    function isLikelyDicomFile(file) {
+        if (!file) {
+            return false;
+        }
+
+        var mimeType = String(file.type || '').toLowerCase();
+        if (mimeType && mimeType.indexOf('dicom') >= 0) {
+            return true;
+        }
+
+        var displayName = getFileDisplayName(file);
+        var baseName = String(displayName || file.name || '').split(/[\\/]/).pop() || '';
+        return baseName.toLowerCase().endsWith('.dcm');
+    }
+
     function toVirtualFileFromZipBlob(blob, baseName) {
         try {
             return new File([blob], baseName, { type: blob.type || 'application/octet-stream' });
@@ -778,7 +793,10 @@
                             relativePath: relativePath,
                             fileName: relativePath,
                             fileSize: file.size,
-                            mimeType: file.type || 'application/octet-stream'
+                            mimeType: file.type || 'application/octet-stream',
+                            isDicom: config && config.settings && config.settings.deidentifyBeforeSend
+                                ? true
+                                : isLikelyDicomFile(file)
                         };
                     })
                 });
