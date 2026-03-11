@@ -56,6 +56,35 @@
     margin-top: 10px;
 }
 
+.girder-uploader-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+
+.girder-delete-button {
+    border: 1px solid #d33f3f;
+    background: linear-gradient(145deg, #fff6f6 0%, #ffe9e9 100%);
+    color: #8b1f1f;
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 0.9em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+}
+
+.girder-delete-button:hover:not(:disabled) {
+    background: linear-gradient(145deg, #ffecec 0%, #ffdede 100%);
+    transform: translateY(-1px);
+}
+
+.girder-delete-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    transform: none;
+}
+
 /* Uploaded file card */
 .girder-file-card {
     border: 1px solid #d6e8da;

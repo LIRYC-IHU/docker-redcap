@@ -49,6 +49,9 @@ class GirderUploaderModule extends AbstractExternalModule
             'instanceId' => $repeat_instance,
             'dagName' => $this->getDagName($group_id),
             'fields' => array_values($fields),
+            'permissions' => [
+                'canModify' => $this->userCanModifyInstrument($instrument),
+            ],
             'settings' => [
                 'chunkSize' => (int) $settings['chunkSize'],
                 'maxRetries' => (int) $settings['maxRetries'],
@@ -90,11 +93,37 @@ class GirderUploaderModule extends AbstractExternalModule
         ]);
 
         if ($action === 'init-batch') {
+            if (!$this->userCanModifyInstrument((string) $instrument)) {
+                return [
+                    'ok' => false,
+                    'error' => 'Uploads are disabled because this instrument is read-only for the current user.',
+                ];
+            }
             return $this->handleInitBatch($payload, (int) $project_id, (string) $instrument, $group_id, (string) $record, (int) $repeat_instance);
         }
 
         if ($action === 'upload-file') {
+            if (!$this->userCanModifyInstrument((string) $instrument)) {
+                return [
+                    'ok' => false,
+                    'error' => 'Uploads are disabled because this instrument is read-only for the current user.',
+                ];
+            }
             return $this->handleUploadFile($payload, (int) $project_id, (string) $instrument);
+        }
+
+        if ($action === 'refresh-upload-metadata') {
+            return $this->handleRefreshUploadMetadata($payload, (int) $project_id, (string) $instrument);
+        }
+
+        if ($action === 'delete-upload-contents') {
+            if (!$this->userCanModifyInstrument((string) $instrument)) {
+                return [
+                    'ok' => false,
+                    'error' => 'Deletion is disabled because this instrument is read-only for the current user.',
+                ];
+            }
+            return $this->handleDeleteUploadContents($payload, (int) $project_id, (string) $instrument);
         }
 
         $this->debugAjax('Unknown AJAX action', [
@@ -319,6 +348,101 @@ class GirderUploaderModule extends AbstractExternalModule
         }
     }
 
+    private function handleRefreshUploadMetadata($payload, $projectId, $instrument)
+    {
+        $data = is_array($payload) ? $payload : [];
+        $fieldName = isset($data['fieldName']) ? (string) $data['fieldName'] : '';
+        $folderId = isset($data['folderId']) ? trim((string) $data['folderId']) : '';
+        $uploadedAt = isset($data['uploadedAt']) ? trim((string) $data['uploadedAt']) : '';
+
+        if ($fieldName === '' || $folderId === '') {
+            return [
+                'ok' => false,
+                'error' => 'Invalid metadata refresh payload.',
+            ];
+        }
+
+        $allowedFields = $this->getGirderUploadFields($projectId, $instrument);
+        if (!in_array($fieldName, $allowedFields, true)) {
+            return [
+                'ok' => false,
+                'error' => 'Field is not allowed for Girder upload.',
+            ];
+        }
+
+        $settings = $this->loadSettings();
+        if (empty($settings['girderUrl']) || empty($settings['girderFrontchannelBaseUrl']) || empty($settings['apiKey']) || empty($settings['rootCollectionId'])) {
+            return [
+                'ok' => false,
+                'error' => 'Girder Uploader module settings are incomplete.',
+            ];
+        }
+
+        try {
+            $metadata = $this->buildMetadataSnapshotFromFolder($settings, $folderId, $uploadedAt);
+            if ($metadata === null) {
+                return [
+                    'ok' => true,
+                    'missing' => true,
+                ];
+            }
+
+            return [
+                'ok' => true,
+                'missing' => false,
+                'metadata' => $metadata,
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'ok' => false,
+                'error' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    private function handleDeleteUploadContents($payload, $projectId, $instrument)
+    {
+        $data = is_array($payload) ? $payload : [];
+        $fieldName = isset($data['fieldName']) ? (string) $data['fieldName'] : '';
+        $folderId = isset($data['folderId']) ? trim((string) $data['folderId']) : '';
+
+        if ($fieldName === '' || $folderId === '') {
+            return [
+                'ok' => false,
+                'error' => 'Invalid delete payload.',
+            ];
+        }
+
+        $allowedFields = $this->getGirderUploadFields($projectId, $instrument);
+        if (!in_array($fieldName, $allowedFields, true)) {
+            return [
+                'ok' => false,
+                'error' => 'Field is not allowed for Girder upload.',
+            ];
+        }
+
+        $settings = $this->loadSettings();
+        if (empty($settings['girderUrl']) || empty($settings['girderFrontchannelBaseUrl']) || empty($settings['apiKey']) || empty($settings['rootCollectionId'])) {
+            return [
+                'ok' => false,
+                'error' => 'Girder Uploader module settings are incomplete.',
+            ];
+        }
+
+        try {
+            $deleted = $this->deleteFolderTree($settings, $folderId);
+            return [
+                'ok' => true,
+                'deleted' => $deleted,
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'ok' => false,
+                'error' => $exception->getMessage(),
+            ];
+        }
+    }
+
     private function loadSettings()
     {
         $backchannelApiUrl = $this->normalizeApiUrl((string) $this->getProjectSetting('girder-backchannel-api-url'));
@@ -391,14 +515,50 @@ class GirderUploaderModule extends AbstractExternalModule
     }
 
     private function getDagName($group_id)
-	{
+		{
 		if (empty($group_id)) {
 			return null;
 		}
 
 		$group_name = \REDCap::getGroupNames(FALSE, $group_id);
-		return $group_name ? $group_name : null;
-	}
+			return $group_name ? $group_name : null;
+		}
+
+    private function userCanModifyInstrument($instrument)
+    {
+        if (!is_string($instrument) || trim($instrument) === '') {
+            return false;
+        }
+
+        if (!method_exists($this, 'getProject')) {
+            return true;
+        }
+
+        $project = $this->getProject();
+        if (!$project || !method_exists($project, 'getRights')) {
+            return true;
+        }
+
+        $username = defined('USERID') ? (string) USERID : '';
+        if ($username === '' && isset($GLOBALS['userid'])) {
+            $username = (string) $GLOBALS['userid'];
+        }
+        if ($username === '') {
+            return true;
+        }
+
+        $userRights = $project->getRights($username);
+        if (!is_array($userRights) || !isset($userRights['forms']) || !is_array($userRights['forms'])) {
+            return true;
+        }
+
+        $formRights = isset($userRights['forms'][$instrument]) ? (string) $userRights['forms'][$instrument] : '';
+        if ($formRights === '') {
+            return false;
+        }
+
+        return in_array($formRights, ['2', '3'], true);
+    }
 
     private function sanitizePathPart($value, $fallback)
     {
@@ -453,6 +613,23 @@ class GirderUploaderModule extends AbstractExternalModule
         ]);
     }
 
+    private function getFolder($settings, $folderId)
+    {
+        return $this->girderRequestJsonOrNull($settings, 'GET', '/folder/' . rawurlencode((string) $folderId), null, [], [404]);
+    }
+
+    private function listChildFolders($settings, $folderId)
+    {
+        $query = http_build_query([
+            'parentType' => 'folder',
+            'parentId' => (string) $folderId,
+            'limit' => 0,
+        ]);
+
+        $folders = $this->girderRequestJson($settings, 'GET', '/folder?' . $query, null);
+        return is_array($folders) ? array_values($folders) : [];
+    }
+
     private function ensureItem($settings, $folderId, $name)
     {
         $query = http_build_query([
@@ -464,6 +641,27 @@ class GirderUploaderModule extends AbstractExternalModule
         return $this->girderRequestJson($settings, 'POST', '/item?' . $query, null, [
             'Content-Type: text/plain',
         ]);
+    }
+
+    private function listItemsInFolder($settings, $folderId)
+    {
+        $query = http_build_query([
+            'folderId' => (string) $folderId,
+            'limit' => 0,
+        ]);
+
+        $items = $this->girderRequestJson($settings, 'GET', '/item?' . $query, null);
+        return is_array($items) ? array_values($items) : [];
+    }
+
+    private function listFilesInItem($settings, $itemId)
+    {
+        $query = http_build_query([
+            'limit' => 0,
+        ]);
+
+        $files = $this->girderRequestJson($settings, 'GET', '/item/' . rawurlencode((string) $itemId) . '/files?' . $query, null);
+        return is_array($files) ? array_values($files) : [];
     }
 
     private function initUpload($settings, $itemId, $fileName, $fileSize, $mimeType)
@@ -616,6 +814,108 @@ class GirderUploaderModule extends AbstractExternalModule
         return false;
     }
 
+    private function buildMetadataSnapshotFromFolder($settings, $folderId, $uploadedAt = '')
+    {
+        $rootFolder = $this->getFolder($settings, $folderId);
+        if (!is_array($rootFolder) || empty($rootFolder['_id'])) {
+            return null;
+        }
+
+        $files = $this->collectFolderListing($settings, $rootFolder, '');
+        usort($files, function ($left, $right) {
+            $leftName = isset($left['name']) ? strtolower((string) $left['name']) : '';
+            $rightName = isset($right['name']) ? strtolower((string) $right['name']) : '';
+            if ($leftName === $rightName) {
+                return 0;
+            }
+            return $leftName < $rightName ? -1 : 1;
+        });
+
+        $rootFolderId = (string) $rootFolder['_id'];
+        $frontBaseUrl = rtrim((string) $settings['girderFrontchannelBaseUrl'], '/');
+
+        return [
+            'version' => 1,
+            'uploadedAt' => $uploadedAt !== '' ? $uploadedAt : (isset($rootFolder['updated']) ? (string) $rootFolder['updated'] : (isset($rootFolder['created']) ? (string) $rootFolder['created'] : null)),
+            'uploadedFiles' => $files,
+            'totalSizeBytes' => array_reduce($files, function ($sum, $file) {
+                return $sum + (isset($file['size']) ? (int) $file['size'] : 0);
+            }, 0),
+            'uploadState' => [
+                'status' => 'completed',
+                'stage' => 'done',
+                'updatedAt' => gmdate('c'),
+                'error' => null,
+            ],
+            'girder' => [
+                'baseApiUrl' => (string) $settings['girderUrl'],
+                'baseUrl' => $frontBaseUrl !== '' ? $frontBaseUrl : null,
+                'rootCollectionId' => (string) $settings['rootCollectionId'],
+                'parentFolderId' => $rootFolderId,
+                'parentFolderUrl' => $frontBaseUrl !== '' ? ($frontBaseUrl . '/#folder/' . $rootFolderId) : null,
+                'folderId' => $rootFolderId,
+                'itemId' => null,
+                'uploadId' => null,
+                'fileId' => null,
+            ],
+        ];
+    }
+
+    private function collectFolderListing($settings, $folder, $prefix)
+    {
+        $result = [];
+        $folderId = isset($folder['_id']) ? (string) $folder['_id'] : '';
+        if ($folderId === '') {
+            return $result;
+        }
+
+        $items = $this->listItemsInFolder($settings, $folderId);
+        foreach ($items as $item) {
+            if (!is_array($item) || empty($item['_id'])) {
+                continue;
+            }
+
+            $itemId = (string) $item['_id'];
+            $files = $this->listFilesInItem($settings, $itemId);
+            foreach ($files as $file) {
+                if (!is_array($file) || empty($file['_id'])) {
+                    continue;
+                }
+
+                $name = isset($file['name']) ? (string) $file['name'] : 'uploaded-file';
+                $relativeName = $prefix !== '' ? ($prefix . '/' . $name) : $name;
+                $result[] = [
+                    'name' => $relativeName,
+                    'originalName' => $name,
+                    'size' => isset($file['size']) ? (int) $file['size'] : 0,
+                    'mimeType' => isset($file['mimeType']) ? (string) $file['mimeType'] : 'application/octet-stream',
+                    'folderId' => $folderId,
+                    'itemId' => $itemId,
+                    'uploadId' => null,
+                    'fileId' => (string) $file['_id'],
+                ];
+            }
+        }
+
+        $childFolders = $this->listChildFolders($settings, $folderId);
+        foreach ($childFolders as $childFolder) {
+            if (!is_array($childFolder) || empty($childFolder['_id'])) {
+                continue;
+            }
+
+            $childFolderEntity = $this->getFolder($settings, (string) $childFolder['_id']);
+            if (!is_array($childFolderEntity) || empty($childFolderEntity['_id'])) {
+                continue;
+            }
+
+            $childName = isset($childFolderEntity['name']) ? $this->sanitizePathPart((string) $childFolderEntity['name'], 'folder') : 'folder';
+            $childPrefix = $prefix !== '' ? ($prefix . '/' . $childName) : $childName;
+            $result = array_merge($result, $this->collectFolderListing($settings, $childFolderEntity, $childPrefix));
+        }
+
+        return $result;
+    }
+
     private function girderRequestJson($settings, $method, $pathWithQuery, $body, $extraHeaders = [])
     {
         $token = $this->getGirderAuthToken($settings, false);
@@ -640,6 +940,68 @@ class GirderUploaderModule extends AbstractExternalModule
         }
 
         return $decoded;
+    }
+
+    private function girderRequestJsonOrNull($settings, $method, $pathWithQuery, $body, $extraHeaders = [], $nullStatusCodes = [])
+    {
+        $token = $this->getGirderAuthToken($settings, false);
+        $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
+
+        if ((int) $response['statusCode'] === 401) {
+            $this->clearCachedGirderAuthToken($settings);
+            $token = $this->getGirderAuthToken($settings, true);
+            $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
+        }
+
+        $statusCode = (int) $response['statusCode'];
+        if (in_array($statusCode, $nullStatusCodes, true)) {
+            return null;
+        }
+
+        $responseBody = (string) $response['body'];
+        if ($statusCode < 200 || $statusCode >= 300) {
+            throw new \Exception('Girder request failed (' . $statusCode . '): ' . $responseBody);
+        }
+
+        if ($responseBody === '') {
+            return [];
+        }
+
+        $decoded = json_decode($responseBody, true);
+        if (!is_array($decoded)) {
+            throw new \Exception('Girder returned an invalid JSON response.');
+        }
+
+        return $decoded;
+    }
+
+    private function girderRequestNoContent($settings, $method, $pathWithQuery, $body = null, $extraHeaders = [], $allowedStatusCodes = [200, 202, 204])
+    {
+        $token = $this->getGirderAuthToken($settings, false);
+        $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
+
+        if ((int) $response['statusCode'] === 401) {
+            $this->clearCachedGirderAuthToken($settings);
+            $token = $this->getGirderAuthToken($settings, true);
+            $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
+        }
+
+        $statusCode = (int) $response['statusCode'];
+        if (in_array($statusCode, $allowedStatusCodes, true)) {
+            return true;
+        }
+
+        throw new \Exception('Girder request failed (' . $statusCode . '): ' . (string) $response['body']);
+    }
+
+    private function deleteFolderTree($settings, $folderId)
+    {
+        $folderId = trim((string) $folderId);
+        if ($folderId === '') {
+            throw new \Exception('Folder id is required for deletion.');
+        }
+
+        return $this->girderRequestNoContent($settings, 'DELETE', '/folder/' . rawurlencode($folderId), null, [], [200, 202, 204, 404]);
     }
 
     private function girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $authToken)

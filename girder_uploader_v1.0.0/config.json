@@ -12,7 +12,9 @@
     ],
     "auth-ajax-actions": [
         "init-batch",
-        "upload-file"
+        "upload-file",
+        "refresh-upload-metadata",
+        "delete-upload-contents"
     ],
     "project-settings": [
         {

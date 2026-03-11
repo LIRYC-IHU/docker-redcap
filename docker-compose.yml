@@ -23,7 +23,7 @@ services:
     volumes:
       - user_uploads:/var/user_uploads
       #- ${REDCAP_DIR}:/var/www/html
-      # - ./girder_uploader_v1.0.0:/var/www/html/modules/girder_uploader_v1.0.0
+      - ./girder_uploader_v1.0.0:/var/www/html/modules/girder_uploader_v1.0.0
     networks:
       - redcap-network
     restart: unless-stopped

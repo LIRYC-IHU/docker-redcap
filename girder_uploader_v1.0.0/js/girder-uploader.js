@@ -340,10 +340,10 @@
             var outputFile;
             try {
                 outputFile = new File([outputBytes], file.name, {
-                    type: file.type || 'application/octet-stream'
+                    type: 'application/dicom'
                 });
             } catch (error) {
-                outputFile = new Blob([outputBytes], { type: file.type || 'application/octet-stream' });
+                outputFile = new Blob([outputBytes], { type: 'application/dicom' });
                 outputFile.name = file.name;
             }
             outputFile.girderRelativePath = relativePath;
@@ -579,6 +579,58 @@
         return size.toFixed(index === 0 ? 0 : 2) + ' ' + units[index];
     }
 
+    function buildFolderUrl(girderPayload) {
+        if (!girderPayload || !girderPayload.parentFolderId || !girderPayload.baseUrl) {
+            return null;
+        }
+        return String(girderPayload.baseUrl).replace(/\/$/, '') + '/#folder/' + String(girderPayload.parentFolderId);
+    }
+
+    function normalizeMetadataPayload(payload) {
+        if (!payload || typeof payload !== 'object') {
+            return null;
+        }
+
+        var normalized = JSON.parse(JSON.stringify(payload));
+        if (!normalized.girder || typeof normalized.girder !== 'object') {
+            normalized.girder = {};
+        }
+
+        if (!normalized.girder.parentFolderUrl) {
+            normalized.girder.parentFolderUrl = buildFolderUrl(normalized.girder);
+        }
+
+        return normalized;
+    }
+
+    function isCompletedPayload(payload) {
+        return !!(payload
+            && payload.uploadState
+            && String(payload.uploadState.status || '') === 'completed'
+            && payload.girder
+            && payload.girder.parentFolderId);
+    }
+
+    function isFailedPayload(payload) {
+        return !!(payload
+            && payload.uploadState
+            && String(payload.uploadState.status || '') === 'failed');
+    }
+
+    function detectReadOnlyPageState() {
+        var saveButton = document.getElementById('submit-btn-savecontinue');
+        if (!saveButton || saveButton.disabled) {
+            return true;
+        }
+
+        var lockCheckbox = document.getElementById('__LOCKRECORD__');
+        if (lockCheckbox && lockCheckbox.checked) {
+            return true;
+        }
+
+        return false;
+    }
+
     function renderFileState(target, payload) {
         if (!payload) {
             target.innerHTML = '';
@@ -595,10 +647,13 @@
         var displayName = fileCount === 1
             ? (uploadedFiles[0].name || uploadedFiles[0].originalName || 'Unknown file')
             : (fileCount + ' files');
-        var totalSizeBytes = uploadedFiles.reduce(function (sum, fileInfo) {
-            var value = Number(fileInfo && fileInfo.size ? fileInfo.size : 0);
-            return sum + (isNaN(value) ? 0 : value);
-        }, 0);
+        var totalSizeBytes = Number(payload.totalSizeBytes);
+        if (!isFinite(totalSizeBytes) || totalSizeBytes < 0) {
+            totalSizeBytes = uploadedFiles.reduce(function (sum, fileInfo) {
+                var value = Number(fileInfo && fileInfo.size ? fileInfo.size : 0);
+                return sum + (isNaN(value) ? 0 : value);
+            }, 0);
+        }
         var size = formatSize(totalSizeBytes);
         var itemId = payload.girder && payload.girder.itemId ? payload.girder.itemId : 'n/a';
         var folderId = payload.girder && payload.girder.parentFolderId ? payload.girder.parentFolderId : 'n/a';
@@ -620,6 +675,9 @@
         var lastItemLine = isFailed
             ? '<div><strong>Last item ID:</strong> ' + escapeHtml(itemId) + '</div>'
             : '';
+        var lastSyncedLine = payload.uploadState && payload.uploadState.syncedAt
+            ? '<div><strong>Last synced:</strong> ' + escapeHtml(String(payload.uploadState.syncedAt)) + '</div>'
+            : '';
 
         target.innerHTML = ''
             + '<div class="' + cardClass + '">'
@@ -628,10 +686,44 @@
             + '<div><strong>Files:</strong> ' + String(fileCount || 0) + '</div>'
             + '<div><strong>Size:</strong> ' + size + '</div>'
             + '<div><strong>Uploaded at:</strong> ' + escapeHtml(uploadedAt) + '</div>'
+            + lastSyncedLine
             + '<div><strong>Girder folder:</strong> ' + folderHtml + '</div>'
             + lastItemLine
             + errorLine
             + '</div>';
+    }
+
+    async function clearMetadataAndSave(textarea) {
+        setFieldValue(textarea, '');
+        await saveFormInBackground();
+    }
+
+    async function refreshMetadataFromGirder(fieldName, payload) {
+        if (!payload || !payload.girder || !payload.girder.parentFolderId) {
+            return { missing: true, metadata: null };
+        }
+
+        var response = await moduleAjax('refresh-upload-metadata', {
+            fieldName: fieldName,
+            folderId: payload.girder.parentFolderId,
+            uploadedAt: payload.uploadedAt || ''
+        });
+
+        return {
+            missing: !!response.missing,
+            metadata: response.metadata ? normalizeMetadataPayload(response.metadata) : null
+        };
+    }
+
+    async function deleteUploadContents(fieldName, payload) {
+        if (!payload || !payload.girder || !payload.girder.parentFolderId) {
+            throw new Error('Missing Girder folder id for deletion.');
+        }
+
+        await moduleAjax('delete-upload-contents', {
+            fieldName: fieldName,
+            folderId: payload.girder.parentFolderId
+        });
     }
 
     async function persistMetadata(textarea, payload, shouldBackgroundSave) {
@@ -652,6 +744,8 @@
         var wrapper = document.createElement('div');
         var dropzone = document.createElement('div');
         var infoZone = document.createElement('div');
+        var actionBar = document.createElement('div');
+        var deleteButton = document.createElement('button');
         var progressContainer = document.createElement('div');
         var progressBar = document.createElement('div');
         var statusLine = document.createElement('div');
@@ -670,6 +764,13 @@
         progressContainer.appendChild(progressBar);
 
         infoZone.className = 'girder-file-info';
+        actionBar.className = 'girder-uploader-actions';
+
+        deleteButton.type = 'button';
+        deleteButton.className = 'girder-delete-button';
+        deleteButton.textContent = 'Delete uploaded contents';
+        deleteButton.style.display = 'none';
+        actionBar.appendChild(deleteButton);
 
         input.type = 'file';
         input.multiple = true;
@@ -679,6 +780,7 @@
         wrapper.appendChild(statusLine);
         wrapper.appendChild(progressContainer);
         wrapper.appendChild(infoZone);
+        wrapper.appendChild(actionBar);
         wrapper.appendChild(input);
 
         textarea.style.display = 'none';
@@ -687,6 +789,9 @@
 
         var existingValue = String(textarea.value || '').trim();
         var isLocked = false;
+        var isBusy = false;
+        var currentMetadata = null;
+        var actionsAllowed = !!(config && config.permissions && config.permissions.canModify) && !detectReadOnlyPageState();
 
         function lockWidgetWithMessage(message) {
             isLocked = true;
@@ -699,34 +804,111 @@
         function switchToInfoOnlyMode() {
             isLocked = true;
             input.disabled = true;
-            if (dropzone.parentNode) {
-                dropzone.parentNode.removeChild(dropzone);
+            dropzone.style.display = 'none';
+            statusLine.style.display = 'none';
+            progressContainer.style.display = 'none';
+        }
+
+        function restoreUploadMode() {
+            isLocked = false;
+            input.disabled = false;
+            dropzone.classList.remove('girder-dropzone-locked');
+            dropzone.removeAttribute('aria-disabled');
+            dropzone.style.display = '';
+            statusLine.style.display = '';
+            progressContainer.style.display = '';
+        }
+
+        function setDeleteAvailability(enabled) {
+            var visible = actionsAllowed && enabled;
+            deleteButton.style.display = visible ? '' : 'none';
+            deleteButton.disabled = !visible || isBusy;
+        }
+
+        function updateInfoState(payload) {
+            currentMetadata = payload ? normalizeMetadataPayload(payload) : null;
+            renderFileState(infoZone, currentMetadata);
+            setDeleteAvailability(isCompletedPayload(currentMetadata));
+        }
+
+        function resetWidgetToEmpty(message) {
+            currentMetadata = null;
+            progressBar.style.width = '0%';
+            infoZone.innerHTML = '';
+            if (actionsAllowed) {
+                restoreUploadMode();
+            } else {
+                switchToInfoOnlyMode();
             }
-            if (statusLine.parentNode) {
-                statusLine.parentNode.removeChild(statusLine);
+            setDeleteAvailability(false);
+            setFieldValue(textarea, '');
+            statusLine.textContent = message || 'Waiting for file selection.';
+        }
+
+        async function refreshExistingMetadata(existingPayload) {
+            updateInfoState(existingPayload);
+            if (!isCompletedPayload(existingPayload)) {
+                return;
             }
-            if (progressContainer.parentNode) {
-                progressContainer.parentNode.removeChild(progressContainer);
+
+            setUploadingState(true);
+            switchToInfoOnlyMode();
+            statusLine.style.display = '';
+            statusLine.textContent = 'Refreshing Girder metadata...';
+
+            try {
+                var refreshed = await refreshMetadataFromGirder(fieldName, existingPayload);
+                if (refreshed.missing || !refreshed.metadata || !Array.isArray(refreshed.metadata.uploadedFiles) || !refreshed.metadata.uploadedFiles.length) {
+                    resetWidgetToEmpty('Uploaded contents were not found in Girder. You can upload again.');
+                    return;
+                }
+
+                refreshed.metadata.uploadState = refreshed.metadata.uploadState || {};
+                refreshed.metadata.uploadState.syncedAt = new Date().toISOString();
+                updateInfoState(refreshed.metadata);
+                setFieldValue(textarea, JSON.stringify(currentMetadata));
+                progressBar.style.width = '100%';
+                switchToInfoOnlyMode();
+                if (actionsAllowed) {
+                    statusLine.style.display = '';
+                    statusLine.textContent = 'Girder metadata refreshed.';
+                }
+            } catch (error) {
+                progressBar.style.width = '100%';
+                switchToInfoOnlyMode();
+                if (actionsAllowed || !currentMetadata) {
+                    statusLine.style.display = '';
+                    statusLine.textContent = 'Unable to refresh Girder metadata. Showing saved metadata.';
+                }
+                debug('Metadata refresh failed', {
+                    fieldName: fieldName,
+                    error: error.message
+                });
+            } finally {
+                setUploadingState(false);
             }
         }
 
         if (existingValue) {
             try {
-                var existingPayload = JSON.parse(existingValue);
-                renderFileState(infoZone, existingPayload);
+                var existingPayload = normalizeMetadataPayload(JSON.parse(existingValue));
+                updateInfoState(existingPayload);
 
-                var existingStatus = existingPayload
-                    && existingPayload.uploadState
-                    && existingPayload.uploadState.status
-                    ? String(existingPayload.uploadState.status)
-                    : '';
-
-                if (existingStatus === 'failed') {
+                if (isFailedPayload(existingPayload)) {
                     progressBar.style.width = '0%';
-                    statusLine.textContent = 'Previous upload failed. You can re-upload.';
+                    if (actionsAllowed) {
+                        restoreUploadMode();
+                        statusLine.textContent = 'Previous upload failed. You can re-upload.';
+                    } else {
+                        switchToInfoOnlyMode();
+                        if (!currentMetadata) {
+                            statusLine.style.display = '';
+                            statusLine.textContent = 'Upload failed. Editing is disabled on this page.';
+                        }
+                    }
                 } else {
                     progressBar.style.width = '100%';
-                    switchToInfoOnlyMode();
+                    refreshExistingMetadata(existingPayload);
                 }
             } catch (error) {
                 lockWidgetWithMessage('Field already contains data. Upload is disabled.');
@@ -734,8 +916,10 @@
         }
 
         function setUploadingState(uploading) {
+            isBusy = uploading;
             dropzone.style.pointerEvents = uploading ? 'none' : 'auto';
             dropzone.style.opacity = uploading ? '0.6' : '1';
+            deleteButton.disabled = uploading || !isCompletedPayload(currentMetadata);
             debug('Uploading state updated', {
                 fieldName: fieldName,
                 uploading: uploading
@@ -743,6 +927,11 @@
         }
 
         async function handleFiles(selectedFiles) {
+            if (!actionsAllowed) {
+                statusLine.textContent = 'Upload actions are disabled on this page.';
+                return;
+            }
+
             var files = await resolveSelectedFilesForUpload(selectedFiles);
             if (!files.length || isLocked) {
                 statusLine.textContent = 'No eligible files found for upload.';
@@ -757,9 +946,12 @@
 
             setUploadingState(true);
             progressBar.style.width = '0%';
+            statusLine.style.display = '';
+            progressContainer.style.display = '';
             statusLine.textContent = 'Preparing upload...';
             var uploadData = null;
             var finalMetadata = null;
+            var pendingPayload = null;
 
             try {
                 files = await deidentifyFilesIfNeeded(files, config, statusLine);
@@ -767,7 +959,7 @@
                     throw new Error('No eligible files after deidentification.');
                 }
 
-                var pendingPayload = {
+                pendingPayload = {
                     version: 1,
                     uploadedAt: null,
                     uploadedFiles: [],
@@ -865,6 +1057,9 @@
                     version: 1,
                     uploadedAt: new Date().toISOString(),
                     uploadedFiles: pendingPayload.uploadedFiles.slice(),
+                    totalSizeBytes: pendingPayload.uploadedFiles.reduce(function (sum, fileInfo) {
+                        return sum + Number(fileInfo && fileInfo.size ? fileInfo.size : 0);
+                    }, 0),
                     uploadState: {
                         status: 'completed',
                         stage: 'done',
@@ -875,7 +1070,7 @@
                 };
 
                 await persistMetadata(textarea, finalMetadata, true);
-                renderFileState(infoZone, finalMetadata);
+                updateInfoState(finalMetadata);
                 progressBar.style.width = '100%';
                 statusLine.textContent = 'Upload complete. Saving form...';
                 lockWidgetWithMessage('Upload complete. Saving form...');
@@ -918,7 +1113,8 @@
                     }
                 };
                 await persistMetadata(textarea, finalMetadata, true);
-                renderFileState(infoZone, finalMetadata);
+                updateInfoState(finalMetadata);
+                restoreUploadMode();
                 debug('Upload failed', {
                     fieldName: fieldName,
                     error: error.message
@@ -931,6 +1127,17 @@
                     debug('Foreground save failed', { error: saveError.message });
                 }
             }
+        }
+
+        if (!actionsAllowed) {
+            switchToInfoOnlyMode();
+            if (currentMetadata) {
+                statusLine.style.display = 'none';
+            } else {
+                statusLine.style.display = '';
+                statusLine.textContent = 'Uploads are disabled because this instrument is read-only or locked.';
+            }
+            setDeleteAvailability(false);
         }
 
         dropzone.addEventListener('click', function () {
@@ -959,6 +1166,42 @@
                 handleFiles(Array.from(input.files));
             }
             input.value = '';
+        });
+
+        deleteButton.addEventListener('click', async function () {
+            if (isBusy || !isCompletedPayload(currentMetadata)) {
+                return;
+            }
+
+            if (!window.confirm('Delete the uploaded contents from Girder and clear this field?')) {
+                return;
+            }
+
+            setUploadingState(true);
+            statusLine.style.display = '';
+            progressContainer.style.display = '';
+            progressBar.style.width = '0%';
+            statusLine.textContent = 'Deleting uploaded contents...';
+
+            try {
+                await deleteUploadContents(fieldName, currentMetadata);
+                await clearMetadataAndSave(textarea);
+                resetWidgetToEmpty('Uploaded contents deleted. You can upload again.');
+                debug('Upload contents deleted', {
+                    fieldName: fieldName
+                });
+            } catch (error) {
+                switchToInfoOnlyMode();
+                statusLine.style.display = '';
+                statusLine.textContent = 'Delete failed: ' + error.message;
+                updateInfoState(currentMetadata);
+                debug('Upload delete failed', {
+                    fieldName: fieldName,
+                    error: error.message
+                });
+            } finally {
+                setUploadingState(false);
+            }
         });
 
         dropzone.addEventListener('dragover', function (event) {
