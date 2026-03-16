@@ -178,3 +178,6 @@ docker exec -it redcap-php bash
 # Test Girder reachability from inside the container
 curl -v http://host.docker.internal:<girder-port>/api/v1/system/check
 ```
+
+# Funding
+This work was sponsored by the French Agence Nationale de la Recherche ANR-23-RHUS-0015
