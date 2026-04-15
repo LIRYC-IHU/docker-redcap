@@ -31,13 +31,24 @@ self.onmessage = async (event) => {
         const recordId = String(data.recordId || '').trim();
         const projectTitle = String(data.projectTitle || '').trim();
         const patientName = projectTitle ? (projectTitle + '^' + recordId) : recordId;
-        const output = module.deidentify(inputBytes, recordId, patientName);
-        const outputBytes = output instanceof Uint8Array ? output : new Uint8Array(output);
+        const fileName = String(data.fileName || data.relativePath || '').trim();
+        const output = module.deidentify(
+            inputBytes,
+            fileName,
+            recordId,
+            patientName,
+            !!data.enableDicom,
+            !!data.enableXml,
+            !!data.enableSchiller
+        );
+        const outputBytes = output.bytes();
 
         self.postMessage({
             id,
             ok: true,
-            bytes: outputBytes.buffer
+            bytes: outputBytes.buffer,
+            format: output.formatName(),
+            mimeType: output.mimeType()
         }, [outputBytes.buffer]);
     } catch (error) {
         self.postMessage({

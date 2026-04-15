@@ -1,13 +1,28 @@
 /* tslint:disable */
 /* eslint-disable */
 
-export function deidentify(input_bytes: Uint8Array, record_id: string, patient_name: string): Uint8Array;
+export class DeidentifyResult {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    bytes(): Uint8Array;
+    formatName(): string;
+    mimeType(): string;
+}
+
+export function deidentify(input_bytes: Uint8Array, file_name: string, record_id: string, patient_name: string, enable_dicom: boolean, enable_xml: boolean, enable_schiller: boolean): DeidentifyResult;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly deidentify: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly __wbg_deidentifyresult_free: (a: number, b: number) => void;
+    readonly deidentify: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number];
+    readonly deidentifyresult_bytes: (a: number) => [number, number];
+    readonly deidentifyresult_formatName: (a: number) => [number, number];
+    readonly deidentifyresult_mimeType: (a: number) => [number, number];
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

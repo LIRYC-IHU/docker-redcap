@@ -1,25 +1,89 @@
 /* @ts-self-types="./dicom_deid.d.ts" */
 
+export class DeidentifyResult {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(DeidentifyResult.prototype);
+        obj.__wbg_ptr = ptr;
+        DeidentifyResultFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        DeidentifyResultFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_deidentifyresult_free(ptr, 0);
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    bytes() {
+        const ret = wasm.deidentifyresult_bytes(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * @returns {string}
+     */
+    formatName() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.deidentifyresult_formatName(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    mimeType() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.deidentifyresult_mimeType(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+}
+if (Symbol.dispose) DeidentifyResult.prototype[Symbol.dispose] = DeidentifyResult.prototype.free;
+
 /**
  * @param {Uint8Array} input_bytes
+ * @param {string} file_name
  * @param {string} record_id
  * @param {string} patient_name
- * @returns {Uint8Array}
+ * @param {boolean} enable_dicom
+ * @param {boolean} enable_xml
+ * @param {boolean} enable_schiller
+ * @returns {DeidentifyResult}
  */
-export function deidentify(input_bytes, record_id, patient_name) {
+export function deidentify(input_bytes, file_name, record_id, patient_name, enable_dicom, enable_xml, enable_schiller) {
     const ptr0 = passArray8ToWasm0(input_bytes, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(record_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr1 = passStringToWasm0(file_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passStringToWasm0(patient_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr2 = passStringToWasm0(record_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len2 = WASM_VECTOR_LEN;
-    const ret = wasm.deidentify(ptr0, len0, ptr1, len1, ptr2, len2);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
+    const ptr3 = passStringToWasm0(patient_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.deidentify(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, enable_dicom, enable_xml, enable_schiller);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
     }
-    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v4;
+    return DeidentifyResult.__wrap(ret[0]);
 }
 
 function __wbg_get_imports() {
@@ -28,6 +92,9 @@ function __wbg_get_imports() {
         __wbg___wbindgen_throw_39bc967c0e5a9b58: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
+        __wbg_getRandomValues_d49329ff89a07af1: function() { return handleError(function (arg0, arg1) {
+            globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
+        }, arguments); },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
@@ -49,6 +116,16 @@ function __wbg_get_imports() {
     };
 }
 
+const DeidentifyResultFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_deidentifyresult_free(ptr >>> 0, 1));
+
+function addToExternrefTable0(obj) {
+    const idx = wasm.__externref_table_alloc();
+    wasm.__wbindgen_externrefs.set(idx, obj);
+    return idx;
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
@@ -65,6 +142,15 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function handleError(f, args) {
+    try {
+        return f.apply(this, args);
+    } catch (e) {
+        const idx = addToExternrefTable0(e);
+        wasm.__wbindgen_exn_store(idx);
+    }
 }
 
 function passArray8ToWasm0(arg, malloc) {

@@ -26,7 +26,7 @@ class GirderUploaderModule extends AbstractExternalModule
         return $link;
     }
 
-    public function redcap_data_entry_form ( int $project_id, string $record, string $instrument, int $event_id, int $group_id = NULL, int $repeat_instance = 1 )
+    public function redcap_data_entry_form($project_id, $record, $instrument, $event_id, $group_id = null, $repeat_instance = 1)
     {
         $this->consolePrint('Hello from data entry form top!');
         $fields = $this->getGirderUploadFields($project_id, $instrument);
@@ -56,7 +56,9 @@ class GirderUploaderModule extends AbstractExternalModule
                 'chunkSize' => (int) $settings['chunkSize'],
                 'maxRetries' => (int) $settings['maxRetries'],
                 'retryDelay' => (int) $settings['retryDelay'],
-                'deidentifyBeforeSend' => (bool) $settings['deidentifyBeforeSend'],
+                'deidentifyDicom' => (bool) $settings['deidentifyDicom'],
+                'deidentifyXmlEcg' => (bool) $settings['deidentifyXmlEcg'],
+                'deidentifySchillerHolter' => (bool) $settings['deidentifySchillerHolter'],
                 'preserveUploadFolderArchitecture' => (bool) $settings['preserveUploadFolderArchitecture'],
                 'deidentifyWorkerUrl' => $this->getUrl('js/deidentify-worker.js', true),
             ],
@@ -393,6 +395,12 @@ class GirderUploaderModule extends AbstractExternalModule
                 'metadata' => $metadata,
             ];
         } catch (\Throwable $exception) {
+            if ($this->isGirderNotFoundException($exception)) {
+                return [
+                    'ok' => true,
+                    'missing' => true,
+                ];
+            }
             return [
                 'ok' => false,
                 'error' => $exception->getMessage(),
@@ -467,7 +475,9 @@ class GirderUploaderModule extends AbstractExternalModule
             'chunkSize' => $this->readIntSetting('chunk-size', 10485760),
             'maxRetries' => $this->readIntSetting('max-retries', 3),
             'retryDelay' => $this->readIntSetting('retry-delay', 1000),
-            'deidentifyBeforeSend' => $this->readBoolSetting('deidentify-before-send', false),
+            'deidentifyDicom' => $this->readBoolSettingTreatEmptyAsFalse('deidentify-dicom', true),
+            'deidentifyXmlEcg' => $this->readBoolSetting('deidentify-xml-ecg', false),
+            'deidentifySchillerHolter' => $this->readBoolSetting('deidentify-schiller-holter', false),
             'preserveUploadFolderArchitecture' => $this->readBoolSettingTreatEmptyAsFalse('preserve-upload-folder-architecture', true),
         ];
         return $settings;
@@ -816,12 +826,19 @@ class GirderUploaderModule extends AbstractExternalModule
 
     private function buildMetadataSnapshotFromFolder($settings, $folderId, $uploadedAt = '')
     {
-        $rootFolder = $this->getFolder($settings, $folderId);
-        if (!is_array($rootFolder) || empty($rootFolder['_id'])) {
-            return null;
-        }
+        try {
+            $rootFolder = $this->getFolder($settings, $folderId);
+            if (!is_array($rootFolder) || empty($rootFolder['_id'])) {
+                return null;
+            }
 
-        $files = $this->collectFolderListing($settings, $rootFolder, '');
+            $files = $this->collectFolderListing($settings, $rootFolder, '');
+        } catch (\Throwable $exception) {
+            if ($this->isGirderNotFoundException($exception)) {
+                return null;
+            }
+            throw $exception;
+        }
         usort($files, function ($left, $right) {
             $leftName = isset($left['name']) ? strtolower((string) $left['name']) : '';
             $rightName = isset($right['name']) ? strtolower((string) $right['name']) : '';
@@ -1314,6 +1331,21 @@ class GirderUploaderModule extends AbstractExternalModule
         }
 
         return (bool) $default;
+    }
+
+    private function isGirderNotFoundException($exception)
+    {
+        if (!$exception instanceof \Throwable) {
+            return false;
+        }
+
+        $message = strtolower(trim((string) $exception->getMessage()));
+        if ($message === '') {
+            return false;
+        }
+
+        return strpos($message, 'girder request failed (404)') !== false
+            || strpos($message, 'not found') !== false;
     }
 
     private function readBoolSettingTreatEmptyAsFalse($key, $default = false)

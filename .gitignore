@@ -9,3 +9,4 @@ Thumbs.db
 *.pyc
 .env
 ihu.env
+**/.gitignore

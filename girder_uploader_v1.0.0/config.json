@@ -63,8 +63,21 @@
             "required": false
         },
         {
-            "key": "deidentify-before-send",
-            "name": "<b>Deidentify Before Send</b> - when enabled, files are deidentified client-side before upload (DICOM only)",
+            "key": "deidentify-dicom",
+            "name": "<b>Enable DICOM Deidentification</b> - deidentify supported DICOM files before upload",
+            "type": "checkbox",
+            "default": "1",
+            "required": false
+        },
+        {
+            "key": "deidentify-xml-ecg",
+            "name": "<b>Enable XML ECG Deidentification</b> - deidentify supported ECG XML files before upload",
+            "type": "checkbox",
+            "required": false
+        },
+        {
+            "key": "deidentify-schiller-holter",
+            "name": "<b>Enable Schiller Holter Deidentification</b> - deidentify supported Schiller Holter files before upload",
             "type": "checkbox",
             "required": false
         },
@@ -89,7 +102,7 @@
                 "name": "Girder Collection",
                 "icon": "fas fa-folder-open",
                 "url": "http://COLLECTION_ID",
-                "show-header-and-footer": true
+                "show-header-and-footer": false
             }
         ]
     }

@@ -264,9 +264,13 @@
                         worker.postMessage({
                             id: id,
                             bytes: payload.bytes,
+                            fileName: payload.fileName,
                             relativePath: payload.relativePath,
                             recordId: payload.recordId,
-                            projectTitle: payload.projectTitle
+                            projectTitle: payload.projectTitle,
+                            enableDicom: payload.enableDicom,
+                            enableXml: payload.enableXml,
+                            enableSchiller: payload.enableSchiller
                         }, [payload.bytes]);
                     } catch (error) {
                         pending.delete(id);
@@ -277,10 +281,16 @@
         };
     }
 
+    function getEnabledDeidentificationFormats(config) {
+        var settings = config && config.settings ? config.settings : {};
+        return {
+            dicom: !!settings.deidentifyDicom,
+            xml: !!settings.deidentifyXmlEcg,
+            schiller: !!settings.deidentifySchillerHolter
+        };
+    }
+
     function getDeidentifyBridge(config) {
-        if (!config || !config.settings || !config.settings.deidentifyBeforeSend) {
-            return null;
-        }
         if (deidentifyBridge) {
             return deidentifyBridge;
         }
@@ -295,19 +305,16 @@
     }
 
     async function deidentifyFilesIfNeeded(files, config, statusLine) {
-        if (!config || !config.settings || !config.settings.deidentifyBeforeSend) {
-            return files;
-        }
-
         var bridge = getDeidentifyBridge(config);
         if (!bridge) {
-            return files;
+            throw new Error('Deidentification worker is unavailable.');
         }
 
+        var enabledFormats = getEnabledDeidentificationFormats(config);
         var recordId = String(config.recordId || '').trim();
         var projectTitle = String(config.projectTitle || '').trim();
         var resultFiles = [];
-        var skippedNonDicomCount = 0;
+        var skippedCount = 0;
 
         for (var i = 0; i < files.length; i += 1) {
             var file = files[i];
@@ -318,15 +325,18 @@
             try {
                 workerResult = await bridge.run({
                     bytes: inputArrayBuffer,
+                    fileName: file.name || relativePath,
                     relativePath: relativePath,
                     recordId: recordId,
-                    projectTitle: projectTitle
+                    projectTitle: projectTitle,
+                    enableDicom: enabledFormats.dicom,
+                    enableXml: enabledFormats.xml,
+                    enableSchiller: enabledFormats.schiller
                 });
             } catch (error) {
                 var message = error && error.message ? String(error.message) : String(error);
-                var lower = message.toLowerCase();
-                if (lower.indexOf('not a valid dicom') >= 0 || lower.indexOf('not a dicom') >= 0) {
-                    skippedNonDicomCount += 1;
+                if (message.indexOf('SKIP:') === 0) {
+                    skippedCount += 1;
                     continue;
                 }
                 throw error;
@@ -338,20 +348,23 @@
             }
 
             var outputFile;
+            var outputMimeType = workerResult && workerResult.mimeType
+                ? String(workerResult.mimeType)
+                : 'application/octet-stream';
             try {
                 outputFile = new File([outputBytes], file.name, {
-                    type: 'application/dicom'
+                    type: outputMimeType
                 });
             } catch (error) {
-                outputFile = new Blob([outputBytes], { type: 'application/dicom' });
+                outputFile = new Blob([outputBytes], { type: outputMimeType });
                 outputFile.name = file.name;
             }
             outputFile.girderRelativePath = relativePath;
             resultFiles.push(outputFile);
         }
 
-        if (skippedNonDicomCount > 0) {
-            statusLine.textContent = 'Skipped ' + skippedNonDicomCount + ' non-DICOM file(s).';
+        if (skippedCount > 0) {
+            statusLine.textContent = 'Skipped ' + skippedCount + ' unsupported or undeidentifiable file(s).';
         }
 
         return resultFiles;
@@ -986,9 +999,8 @@
                             fileName: relativePath,
                             fileSize: file.size,
                             mimeType: file.type || 'application/octet-stream',
-                            isDicom: config && config.settings && config.settings.deidentifyBeforeSend
-                                ? true
-                                : isLikelyDicomFile(file)
+                            isDicom: (file.type || '').toLowerCase() === 'application/dicom'
+                                || isLikelyDicomFile(file)
                         };
                     })
                 });

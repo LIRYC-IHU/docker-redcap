@@ -1,61 +1,110 @@
-use std::io::Cursor;
+mod dicom;
+mod schiller;
+mod xml;
+
 use wasm_bindgen::prelude::*;
 
-use dicom_anonymization::actions::Action;
-use dicom_anonymization::config::builder::ConfigBuilder;
-use dicom_anonymization::config::uid_root::UidRoot;
-use dicom_anonymization::processor::DefaultProcessor;
-use dicom_anonymization::tags;
-use dicom_anonymization::Anonymizer;
+#[wasm_bindgen]
+pub struct DeidentifyResult {
+    bytes: Vec<u8>,
+    format_name: String,
+    mime_type: String,
+}
 
 #[wasm_bindgen]
-pub fn deidentify(input_bytes: &[u8], record_id: String, patient_name: String) -> Result<Vec<u8>, JsValue> {
-    if input_bytes.is_empty() {
-        return Err(JsValue::from_str("Input file is empty."));
+impl DeidentifyResult {
+    #[wasm_bindgen(js_name = bytes)]
+    pub fn bytes_js(&self) -> Vec<u8> {
+        self.bytes.clone()
     }
 
-    // First pass: verify the payload is a readable DICOM object.
-    // This enforces strict filtering when deidentification is enabled.
-    let mut verify_cursor = Cursor::new(input_bytes);
-    dicom_object::from_reader(&mut verify_cursor)
-        .map_err(|e| JsValue::from_str(&format!("Input is not a valid DICOM file: {e}")))?;
+    #[wasm_bindgen(js_name = formatName)]
+    pub fn format_name_js(&self) -> String {
+        self.format_name.clone()
+    }
 
-    let record_id = if record_id.trim().is_empty() {
+    #[wasm_bindgen(js_name = mimeType)]
+    pub fn mime_type_js(&self) -> String {
+        self.mime_type.clone()
+    }
+}
+
+#[wasm_bindgen]
+pub fn deidentify(
+    input_bytes: &[u8],
+    file_name: String,
+    record_id: String,
+    patient_name: String,
+    enable_dicom: bool,
+    enable_xml: bool,
+    enable_schiller: bool,
+) -> Result<DeidentifyResult, JsValue> {
+    let normalized_record_id = if record_id.trim().is_empty() {
         "UNASSIGNED_RECORD".to_string()
     } else {
-        record_id
+        record_id.trim().to_string()
     };
-
-    let patient_name = if patient_name.trim().is_empty() {
-        format!("REDCAP_PROJECT^{}", record_id)
+    let normalized_patient_name = if patient_name.trim().is_empty() {
+        format!("REDCAP_PROJECT^{}", normalized_record_id)
     } else {
-        patient_name
+        patient_name.trim().to_string()
     };
 
-    let config = ConfigBuilder::default()
-        .uid_root(UidRoot("1.2.826.0.1.3680043.10.543".into()))
-        .tag_action(tags::PATIENT_ID, Action::Replace {
-            value: record_id.into(),
-        })
-        .tag_action(tags::PATIENT_NAME, Action::Replace {
-            value: patient_name.into(),
-        })
-        .tag_action(tags::DEIDENTIFICATION_METHOD, Action::Replace {
-            value: "IHU LIRYC REDCAP PLUGIN".into(),
-        })
-        .build();
+    if schiller::validate(input_bytes).is_ok() {
+        if enable_schiller {
+            let output = schiller::deidentify(input_bytes, &normalized_record_id)
+                .map_err(|e| JsValue::from_str(&e))?;
+            return Ok(DeidentifyResult {
+                bytes: output,
+                format_name: "schiller".to_string(),
+                mime_type: "application/octet-stream".to_string(),
+            });
+        }
 
-    let processor = DefaultProcessor::new(config);
-    let anonymizer = Anonymizer::new(processor);
+        return Ok(DeidentifyResult {
+            bytes: input_bytes.to_vec(),
+            format_name: "schiller".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+        });
+    }
 
-    let anonymized = anonymizer
-        .anonymize(Cursor::new(input_bytes))
-        .map_err(|e| JsValue::from_str(&format!("Anonymization failed: {e}")))?;
+    if xml::validate(input_bytes, &file_name).is_ok() {
+        if enable_xml {
+            let output = xml::deidentify(input_bytes, &file_name, &normalized_record_id)
+                .map_err(|e| JsValue::from_str(&e))?;
+            return Ok(DeidentifyResult {
+                bytes: output,
+                format_name: "xml".to_string(),
+                mime_type: "application/xml".to_string(),
+            });
+        }
 
-    let mut out = Vec::new();
-    anonymized
-        .write(&mut out)
-        .map_err(|e| JsValue::from_str(&format!("Write failed: {e}")))?;
+        return Ok(DeidentifyResult {
+            bytes: input_bytes.to_vec(),
+            format_name: "xml".to_string(),
+            mime_type: "application/xml".to_string(),
+        });
+    }
 
-    Ok(out)
+    if dicom::validate(input_bytes).is_ok() {
+        if enable_dicom {
+            let output = dicom::deidentify(input_bytes, &normalized_record_id, &normalized_patient_name)
+                .map_err(|e| JsValue::from_str(&e))?;
+            return Ok(DeidentifyResult {
+                bytes: output,
+                format_name: "dicom".to_string(),
+                mime_type: "application/dicom".to_string(),
+            });
+        }
+
+        return Ok(DeidentifyResult {
+            bytes: input_bytes.to_vec(),
+            format_name: "dicom".to_string(),
+            mime_type: "application/dicom".to_string(),
+        });
+    }
+
+    Err(JsValue::from_str(
+        "SKIP: file is unsupported",
+    ))
 }
