@@ -274,21 +274,23 @@ class GirderUploaderModule extends AbstractExternalModule
         $data = is_array($payload) ? $payload : [];
         $fieldName = isset($data['fieldName']) ? (string) $data['fieldName'] : '';
         $uploadId = isset($data['uploadId']) ? (string) $data['uploadId'] : '';
+        $offset = isset($data['offset']) ? (int) $data['offset'] : 0;
         $fileBase64 = isset($data['fileBase64']) ? (string) $data['fileBase64'] : '';
 
         $this->debugAjax('upload-file payload parsed', [
             'fieldName' => $fieldName,
             'uploadId' => $uploadId,
+            'offset' => $offset,
             'fileBase64Length' => strlen($fileBase64),
             'projectId' => (int) $projectId,
             'instrument' => (string) $instrument,
         ]);
 
-        if ($fieldName === '' || $uploadId === '' || $fileBase64 === '') {
+        if ($fieldName === '' || $uploadId === '' || $offset < 0 || $fileBase64 === '') {
             $this->debugAjax('upload-file rejected: invalid payload');
             return [
                 'ok' => false,
-                'error' => 'Invalid file upload payload.',
+                'error' => 'Invalid file chunk upload payload.',
             ];
         }
 
@@ -316,6 +318,7 @@ class GirderUploaderModule extends AbstractExternalModule
 
         $this->debugAjax('upload-file decoded', [
             'uploadId' => $uploadId,
+            'offset' => $offset,
             'fileBytes' => strlen($binaryFile),
         ]);
 
@@ -329,9 +332,10 @@ class GirderUploaderModule extends AbstractExternalModule
         }
 
         try {
-            $fileEntity = $this->uploadBinaryFileInChunks($settings, $uploadId, $binaryFile);
+            $fileEntity = $this->uploadChunk($settings, $uploadId, $offset, $binaryFile);
             $this->debugAjax('upload-file completed', [
                 'uploadId' => $uploadId,
+                'offset' => $offset,
                 'fileId' => isset($fileEntity['_id']) ? (string) $fileEntity['_id'] : null,
             ]);
             return [
@@ -938,7 +942,7 @@ class GirderUploaderModule extends AbstractExternalModule
         $token = $this->getGirderAuthToken($settings, false);
         $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
 
-        if ((int) $response['statusCode'] === 401) {
+        if ($this->girderResponseNeedsFreshToken($response)) {
             $this->clearCachedGirderAuthToken($settings);
             $token = $this->getGirderAuthToken($settings, true);
             $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
@@ -964,7 +968,7 @@ class GirderUploaderModule extends AbstractExternalModule
         $token = $this->getGirderAuthToken($settings, false);
         $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
 
-        if ((int) $response['statusCode'] === 401) {
+        if ($this->girderResponseNeedsFreshToken($response)) {
             $this->clearCachedGirderAuthToken($settings);
             $token = $this->getGirderAuthToken($settings, true);
             $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
@@ -997,7 +1001,7 @@ class GirderUploaderModule extends AbstractExternalModule
         $token = $this->getGirderAuthToken($settings, false);
         $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
 
-        if ((int) $response['statusCode'] === 401) {
+        if ($this->girderResponseNeedsFreshToken($response)) {
             $this->clearCachedGirderAuthToken($settings);
             $token = $this->getGirderAuthToken($settings, true);
             $response = $this->girderRequestWithToken($settings, $method, $pathWithQuery, $body, $extraHeaders, $token);
@@ -1025,6 +1029,7 @@ class GirderUploaderModule extends AbstractExternalModule
     {
         $headers = array_merge([
             'Girder-Token: ' . (string) $authToken,
+            'Authorization: Bearer ' . (string) $authToken,
             'Accept: application/json',
         ], is_array($extraHeaders) ? $extraHeaders : []);
 
@@ -1034,6 +1039,30 @@ class GirderUploaderModule extends AbstractExternalModule
             $headers,
             $body
         );
+    }
+
+    private function girderResponseNeedsFreshToken($response)
+    {
+        $statusCode = isset($response['statusCode']) ? (int) $response['statusCode'] : 0;
+        if ($statusCode === 401) {
+            return true;
+        }
+
+        if ($statusCode !== 403) {
+            return false;
+        }
+
+        $decoded = json_decode(isset($response['body']) ? (string) $response['body'] : '', true);
+        if (!is_array($decoded)) {
+            return false;
+        }
+
+        $type = isset($decoded['type']) ? strtolower((string) $decoded['type']) : '';
+        $message = isset($decoded['message']) ? strtolower((string) $decoded['message']) : '';
+
+        return $type === 'access'
+            && strpos($message, 'user none') !== false
+            && strpos($message, 'access denied') !== false;
     }
 
     private function getGirderAuthToken($settings, $forceRefresh = false)

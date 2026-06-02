@@ -480,31 +480,90 @@
         return normalizeUploadFiles(dataTransfer.files);
     }
 
+    function getBackendChunkSize(settings) {
+        var girderMinimumChunkSize = 5 * 1024 * 1024;
+        var backendMaximumChunkSize = girderMinimumChunkSize;
+        var configuredChunkSize = Number(settings && settings.chunkSize ? settings.chunkSize : 10485760);
+        if (!isFinite(configuredChunkSize) || configuredChunkSize <= 0) {
+            configuredChunkSize = 10485760;
+        }
+
+        return Math.max(girderMinimumChunkSize, Math.min(configuredChunkSize, backendMaximumChunkSize));
+    }
+
     async function uploadFileViaBackend(settings, fieldName, uploadData, file, onProgress) {
         var attempt = 0;
         var maxRetries = Number(settings && settings.maxRetries ? settings.maxRetries : 3);
         var retryDelay = Number(settings && settings.retryDelay ? settings.retryDelay : 1000);
+        var chunkSize = getBackendChunkSize(settings);
+        var offset = 0;
+        var lastFileEntity = null;
 
-        while (true) {
-            try {
-                onProgress(5);
-                var fileBase64 = await blobToBase64(file);
-                onProgress(35);
-                var response = await moduleAjax('upload-file', {
-                    fieldName: fieldName,
-                    uploadId: uploadData.uploadId,
-                    fileBase64: fileBase64
-                });
-                onProgress(100);
-                return response.file || null;
-            } catch (error) {
-                attempt += 1;
-                if (attempt > maxRetries) {
-                    throw error;
+        if (!file || !file.size) {
+            throw new Error('Cannot upload an empty file.');
+        }
+
+        var totalChunks = Math.ceil(file.size / chunkSize);
+        onProgress(5, {
+            chunkIndex: 1,
+            totalChunks: totalChunks,
+            uploadedBytes: 0,
+            totalBytes: file.size,
+            percent: 5
+        });
+        while (offset < file.size) {
+            var end = Math.min(offset + chunkSize, file.size);
+            var chunk = file.slice(offset, end);
+            var chunkIndex = Math.floor(offset / chunkSize) + 1;
+            var startingPercent = Math.max(5, Math.round((offset / file.size) * 100));
+
+            onProgress(startingPercent, {
+                chunkIndex: chunkIndex,
+                totalChunks: totalChunks,
+                uploadedBytes: offset,
+                totalBytes: file.size,
+                percent: startingPercent
+            });
+
+            while (true) {
+                try {
+                    var fileBase64 = await blobToBase64(chunk);
+                    var response = await moduleAjax('upload-file', {
+                        fieldName: fieldName,
+                        uploadId: uploadData.uploadId,
+                        offset: offset,
+                        fileBase64: fileBase64
+                    });
+                    lastFileEntity = response.file || lastFileEntity;
+                    offset = end;
+                    attempt = 0;
+                    var completedPercent = Math.max(5, Math.round((offset / file.size) * 100));
+                    onProgress(completedPercent, {
+                        chunkIndex: chunkIndex,
+                        totalChunks: totalChunks,
+                        uploadedBytes: offset,
+                        totalBytes: file.size,
+                        percent: completedPercent
+                    });
+                    break;
+                } catch (error) {
+                    attempt += 1;
+                    if (attempt > maxRetries) {
+                        throw error;
+                    }
+                    await delay(retryDelay);
                 }
-                await delay(retryDelay);
             }
         }
+
+        onProgress(100, {
+            chunkIndex: totalChunks,
+            totalChunks: totalChunks,
+            uploadedBytes: file.size,
+            totalBytes: file.size,
+            percent: 100
+        });
+        return lastFileEntity;
     }
 
     function setFieldValue(textarea, value) {
@@ -1042,10 +1101,22 @@
                     pendingPayload.uploadState.stage = 'uploading';
                     pendingPayload.uploadState.updatedAt = new Date().toISOString();
 
-                    var fileEntity = await uploadFileViaBackend(config.settings, fieldName, uploadData, file, function (percent) {
+                    var fileEntity = await uploadFileViaBackend(config.settings, fieldName, uploadData, file, function (percent, chunkInfo) {
                         var normalizedPercent = Math.round(((fileIndex + (percent / 100)) / totalFiles) * 100);
                         progressBar.style.width = normalizedPercent + '%';
-                        statusLine.textContent = filePrefix + 'Uploading...';
+                        if (chunkInfo && chunkInfo.totalChunks > 1) {
+                            statusLine.textContent = filePrefix
+                                + 'Uploading chunk '
+                                + chunkInfo.chunkIndex
+                                + '/'
+                                + chunkInfo.totalChunks
+                                + ' - '
+                                + formatSize(chunkInfo.uploadedBytes)
+                                + '/'
+                                + formatSize(chunkInfo.totalBytes);
+                        } else {
+                            statusLine.textContent = filePrefix + 'Uploading...';
+                        }
                     });
 
                     uploadedFiles.push({
