@@ -25,7 +25,9 @@ It supports file upload, folder drag-and-drop, optional ZIP expansion, optional 
 - Target path format:
   - `{DAG}/{record_id}/{field_name}`
   - if repeating instance > 1: `{DAG}/{record_id}/{field_name} -{instance_id}`
-- Folder uploads preserve subfolder hierarchy in Girder.
+- Folder uploads preserve subfolder hierarchy in Girder when `preserve-upload-folder-architecture` is enabled.
+- When `preserve-upload-folder-architecture` is disabled, all files are stored at the field root with neutral names (`0001.ext` to `9999.ext`) and user-provided folder names are not created in Girder.
+- Upload batches are limited to 9999 files.
 - Hidden/temp files are filtered out (e.g. `.DS_Store`, dotfiles, `~*`).
 - Single ZIP upload is expanded client-side and uploaded as file contents.
 - ZIP files found in subfolders or during multi-file normal uploads are discarded.

@@ -83,7 +83,7 @@
         },
         {
             "key": "preserve-upload-folder-architecture",
-            "name": "<b>Preserve Upload Folder Architecture</b> - when disabled, DICOM files are stored at field root and grouped by source folder",
+            "name": "<b>Preserve Upload Folder Architecture</b> - when disabled, files are stored at field root with neutral names (0001.ext to 9999.ext)",
             "type": "checkbox",
             "default": "1",
             "required": false

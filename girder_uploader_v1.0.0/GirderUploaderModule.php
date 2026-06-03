@@ -159,6 +159,15 @@ class GirderUploaderModule extends AbstractExternalModule
                 'error' => 'Invalid upload batch initialization payload.',
             ];
         }
+        if (count($files) > 9999) {
+            $this->debugAjax('init-batch rejected: too many files', [
+                'fileCount' => count($files),
+            ]);
+            return [
+                'ok' => false,
+                'error' => 'A maximum of 9999 files can be uploaded at once.',
+            ];
+        }
 
         $allowedFields = $this->getGirderUploadFields($projectId, $instrument);
         if (!in_array($fieldName, $allowedFields, true)) {
@@ -234,7 +243,8 @@ class GirderUploaderModule extends AbstractExternalModule
                     $dicomItemCacheByFolderId,
                     $isDicom,
                     $preserveUploadFolderArchitecture,
-                    $dicomFlatItemCacheBySourceFolder
+                    $dicomFlatItemCacheBySourceFolder,
+                    $index + 1
                 );
             }
 
@@ -746,7 +756,8 @@ class GirderUploaderModule extends AbstractExternalModule
         &$dicomItemCacheByFolderId = [],
         $isDicomHint = null,
         $preserveUploadFolderArchitecture = true,
-        &$dicomFlatItemCacheBySourceFolder = []
+        &$dicomFlatItemCacheBySourceFolder = [],
+        $uploadIndex = 1
     )
     {
         $pathParts = $this->splitRelativePath($relativePath);
@@ -754,9 +765,12 @@ class GirderUploaderModule extends AbstractExternalModule
         $subfolders = array_slice($pathParts, 0, max(0, count($pathParts) - 1));
         $sourceFolderKey = empty($subfolders) ? '.' : implode('/', $subfolders);
         $isDicom = is_bool($isDicomHint) ? $isDicomHint : $this->isDicomFile($leafFileName, $mimeType);
+        $storedFileName = $preserveUploadFolderArchitecture
+            ? $leafFileName
+            : $this->buildNeutralFileName($uploadIndex, $leafFileName, $mimeType, $isDicom);
 
         $targetFolder = $fieldFolder;
-        if ($preserveUploadFolderArchitecture || !$isDicom) {
+        if ($preserveUploadFolderArchitecture) {
             foreach ($subfolders as $segment) {
                 $targetFolder = $this->ensureFolder($settings, 'folder', (string) $targetFolder['_id'], $segment);
             }
@@ -788,13 +802,12 @@ class GirderUploaderModule extends AbstractExternalModule
                 $item = $dicomFlatItemCacheBySourceFolder[$sourceFolderKey];
             }
         } else {
-            $item = $this->ensureItem($settings, $targetFolderId, $leafFileName);
+            $item = $this->ensureItem($settings, $targetFolderId, $storedFileName);
         }
 
-        $upload = $this->initUpload($settings, (string) $item['_id'], $leafFileName, $fileSize, $mimeType);
+        $upload = $this->initUpload($settings, (string) $item['_id'], $storedFileName, $fileSize, $mimeType);
 
-        return [
-            'relativePath' => (string) $relativePath,
+        $uploadPlan = [
             'uploadId' => (string) $upload['_id'],
             'itemId' => (string) $item['_id'],
             'folderId' => (string) $targetFolder['_id'],
@@ -805,7 +818,40 @@ class GirderUploaderModule extends AbstractExternalModule
             'girderUrl' => (string) $settings['girderUrl'],
             'girderFrontchannelBaseUrl' => (string) $settings['girderFrontchannelBaseUrl'],
             'rootCollectionId' => (string) $settings['rootCollectionId'],
+            'storedFileName' => $storedFileName,
         ];
+
+        if ($preserveUploadFolderArchitecture) {
+            $uploadPlan['relativePath'] = (string) $relativePath;
+        }
+
+        return $uploadPlan;
+    }
+
+    private function buildNeutralFileName($uploadIndex, $leafFileName, $mimeType, $isDicom)
+    {
+        $index = max(1, min(9999, (int) $uploadIndex));
+        $extension = $this->getSafeFileExtension($leafFileName);
+
+        if ($extension === '' && $isDicom) {
+            $extension = 'dcm';
+        } elseif ($extension === '' && strtolower(trim((string) $mimeType)) === 'application/xml') {
+            $extension = 'xml';
+        }
+
+        $name = str_pad((string) $index, 4, '0', STR_PAD_LEFT);
+        return $extension !== '' ? ($name . '.' . $extension) : $name;
+    }
+
+    private function getSafeFileExtension($fileName)
+    {
+        $fileName = strtolower(trim((string) $fileName));
+        if ($fileName === '' || strpos($fileName, '.') === false) {
+            return '';
+        }
+
+        $extension = (string) pathinfo($fileName, PATHINFO_EXTENSION);
+        return preg_match('/^[a-z0-9]{1,10}$/', $extension) ? $extension : '';
     }
 
     private function isDicomFile($fileName, $mimeType)

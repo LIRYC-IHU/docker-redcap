@@ -1009,6 +1009,10 @@
                 statusLine.textContent = 'No eligible files found for upload.';
                 return;
             }
+            if (files.length > 9999) {
+                statusLine.textContent = 'A maximum of 9999 files can be uploaded at once.';
+                return;
+            }
 
             debug('Files selected', {
                 fieldName: fieldName,
@@ -1075,8 +1079,9 @@
                     var filePrefix = (fileIndex + 1) + '/' + totalFiles + ' ';
                     var uploadPlan = batchUploads[fileIndex];
                     if (!uploadPlan || !uploadPlan.uploadId) {
-                        throw new Error('Missing upload plan for file ' + currentFileLabel);
+                        throw new Error('Missing upload plan for file #' + (fileIndex + 1));
                     }
+                    var storedFileName = uploadPlan.storedFileName || currentFileLabel;
 
                     statusLine.textContent = filePrefix + 'Uploading file...';
                     uploadData = uploadPlan;
@@ -1120,7 +1125,7 @@
                     });
 
                     uploadedFiles.push({
-                        name: currentFileLabel,
+                        name: storedFileName,
                         size: file.size,
                         mimeType: file.type || 'application/octet-stream',
                         folderId: uploadData.folderId,
