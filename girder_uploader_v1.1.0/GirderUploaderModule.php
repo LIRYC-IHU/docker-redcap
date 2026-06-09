@@ -882,14 +882,17 @@ class GirderUploaderModule extends AbstractExternalModule
                 return null;
             }
 
-            $files = $this->collectFolderListing($settings, $rootFolder, '');
+            $listingSummary = $this->collectFolderListingSummary($settings, $rootFolder, '', 10);
         } catch (\Throwable $exception) {
             if ($this->isGirderNotFoundException($exception)) {
                 return null;
             }
             throw $exception;
         }
-        usort($files, function ($left, $right) {
+        $sampleFiles = isset($listingSummary['sampleFiles']) && is_array($listingSummary['sampleFiles'])
+            ? $listingSummary['sampleFiles']
+            : [];
+        usort($sampleFiles, function ($left, $right) {
             $leftName = isset($left['name']) ? strtolower((string) $left['name']) : '';
             $rightName = isset($right['name']) ? strtolower((string) $right['name']) : '';
             if ($leftName === $rightName) {
@@ -903,11 +906,18 @@ class GirderUploaderModule extends AbstractExternalModule
 
         return [
             'version' => 1,
+            'encoding' => 'summary-v1',
             'uploadedAt' => $uploadedAt !== '' ? $uploadedAt : (isset($rootFolder['updated']) ? (string) $rootFolder['updated'] : (isset($rootFolder['created']) ? (string) $rootFolder['created'] : null)),
-            'uploadedFiles' => $files,
-            'totalSizeBytes' => array_reduce($files, function ($sum, $file) {
-                return $sum + (isset($file['size']) ? (int) $file['size'] : 0);
-            }, 0),
+            'uploadedFiles' => $sampleFiles,
+            'uploadSummary' => [
+                'mode' => 'summary',
+                'fileCount' => isset($listingSummary['fileCount']) ? (int) $listingSummary['fileCount'] : 0,
+                'totalSizeBytes' => isset($listingSummary['totalSizeBytes']) ? (int) $listingSummary['totalSizeBytes'] : 0,
+                'sampleLimit' => 10,
+                'sampleFiles' => $sampleFiles,
+                'omittedFileCount' => max(0, (isset($listingSummary['fileCount']) ? (int) $listingSummary['fileCount'] : 0) - count($sampleFiles)),
+            ],
+            'totalSizeBytes' => isset($listingSummary['totalSizeBytes']) ? (int) $listingSummary['totalSizeBytes'] : 0,
             'uploadState' => [
                 'status' => 'completed',
                 'stage' => 'done',
@@ -915,25 +925,23 @@ class GirderUploaderModule extends AbstractExternalModule
                 'error' => null,
             ],
             'girder' => [
-                'baseApiUrl' => (string) $settings['girderUrl'],
                 'baseUrl' => $frontBaseUrl !== '' ? $frontBaseUrl : null,
-                'rootCollectionId' => (string) $settings['rootCollectionId'],
                 'parentFolderId' => $rootFolderId,
                 'parentFolderUrl' => $frontBaseUrl !== '' ? ($frontBaseUrl . '/#folder/' . $rootFolderId) : null,
-                'folderId' => $rootFolderId,
-                'itemId' => null,
-                'uploadId' => null,
-                'fileId' => null,
             ],
         ];
     }
 
-    private function collectFolderListing($settings, $folder, $prefix)
+    private function collectFolderListingSummary($settings, $folder, $prefix, $sampleLimit = 10)
     {
-        $result = [];
+        $summary = [
+            'fileCount' => 0,
+            'totalSizeBytes' => 0,
+            'sampleFiles' => [],
+        ];
         $folderId = isset($folder['_id']) ? (string) $folder['_id'] : '';
         if ($folderId === '') {
-            return $result;
+            return $summary;
         }
 
         $items = $this->listItemsInFolder($settings, $folderId);
@@ -951,16 +959,18 @@ class GirderUploaderModule extends AbstractExternalModule
 
                 $name = isset($file['name']) ? (string) $file['name'] : 'uploaded-file';
                 $relativeName = $prefix !== '' ? ($prefix . '/' . $name) : $name;
-                $result[] = [
-                    'name' => $relativeName,
-                    'originalName' => $name,
-                    'size' => isset($file['size']) ? (int) $file['size'] : 0,
-                    'mimeType' => isset($file['mimeType']) ? (string) $file['mimeType'] : 'application/octet-stream',
-                    'folderId' => $folderId,
-                    'itemId' => $itemId,
-                    'uploadId' => null,
-                    'fileId' => (string) $file['_id'],
-                ];
+                $size = isset($file['size']) ? (int) $file['size'] : 0;
+                $summary['fileCount'] += 1;
+                $summary['totalSizeBytes'] += $size;
+
+                if (count($summary['sampleFiles']) < $sampleLimit) {
+                    $summary['sampleFiles'][] = [
+                        'name' => $relativeName,
+                        'originalName' => $name,
+                        'size' => $size,
+                        'mimeType' => isset($file['mimeType']) ? (string) $file['mimeType'] : 'application/octet-stream',
+                    ];
+                }
             }
         }
 
@@ -977,10 +987,22 @@ class GirderUploaderModule extends AbstractExternalModule
 
             $childName = isset($childFolderEntity['name']) ? $this->sanitizePathPart((string) $childFolderEntity['name'], 'folder') : 'folder';
             $childPrefix = $prefix !== '' ? ($prefix . '/' . $childName) : $childName;
-            $result = array_merge($result, $this->collectFolderListing($settings, $childFolderEntity, $childPrefix));
+            $childSummary = $this->collectFolderListingSummary($settings, $childFolderEntity, $childPrefix, $sampleLimit);
+            $summary['fileCount'] += isset($childSummary['fileCount']) ? (int) $childSummary['fileCount'] : 0;
+            $summary['totalSizeBytes'] += isset($childSummary['totalSizeBytes']) ? (int) $childSummary['totalSizeBytes'] : 0;
+
+            $childSamples = isset($childSummary['sampleFiles']) && is_array($childSummary['sampleFiles'])
+                ? $childSummary['sampleFiles']
+                : [];
+            foreach ($childSamples as $sampleFile) {
+                if (count($summary['sampleFiles']) >= $sampleLimit) {
+                    break;
+                }
+                $summary['sampleFiles'][] = $sampleFile;
+            }
         }
 
-        return $result;
+        return $summary;
     }
 
     private function girderRequestJson($settings, $method, $pathWithQuery, $body, $extraHeaders = [])

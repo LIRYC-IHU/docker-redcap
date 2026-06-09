@@ -1,6 +1,7 @@
 (function () {
     'use strict';
     var deidentifyBridge = null;
+    var STORED_FILE_SAMPLE_LIMIT = 10;
 
     function debug(message, details) {
         if (typeof console === 'undefined' || typeof console.debug !== 'function') {
@@ -667,12 +668,90 @@
         if (!normalized.girder || typeof normalized.girder !== 'object') {
             normalized.girder = {};
         }
+        if (!normalized.uploadSummary || typeof normalized.uploadSummary !== 'object') {
+            normalized.uploadSummary = buildUploadSummary(normalized);
+        }
+        if (!Array.isArray(normalized.uploadedFiles)) {
+            normalized.uploadedFiles = [];
+        }
+        if (!isFinite(Number(normalized.totalSizeBytes)) || Number(normalized.totalSizeBytes) < 0) {
+            normalized.totalSizeBytes = Number(normalized.uploadSummary.totalSizeBytes || 0);
+        }
 
         if (!normalized.girder.parentFolderUrl) {
             normalized.girder.parentFolderUrl = buildFolderUrl(normalized.girder);
         }
 
         return normalized;
+    }
+
+    function copyFileSummary(fileInfo) {
+        if (!fileInfo || typeof fileInfo !== 'object') {
+            return null;
+        }
+
+        return {
+            name: fileInfo.name || fileInfo.originalName || 'uploaded-file',
+            originalName: fileInfo.originalName || fileInfo.name || 'uploaded-file',
+            size: Number(fileInfo.size || 0),
+            mimeType: fileInfo.mimeType || 'application/octet-stream'
+        };
+    }
+
+    function buildUploadSummary(payload) {
+        var files = payload && Array.isArray(payload.uploadedFiles) ? payload.uploadedFiles : [];
+        var existingSummary = payload && payload.uploadSummary && typeof payload.uploadSummary === 'object'
+            ? payload.uploadSummary
+            : {};
+        var sampleFiles = Array.isArray(existingSummary.sampleFiles)
+            ? existingSummary.sampleFiles.slice(0, STORED_FILE_SAMPLE_LIMIT).map(copyFileSummary).filter(Boolean)
+            : files.slice(0, STORED_FILE_SAMPLE_LIMIT).map(copyFileSummary).filter(Boolean);
+        var fileCount = Number(existingSummary.fileCount);
+        if (!isFinite(fileCount) || fileCount < files.length) {
+            fileCount = files.length;
+        }
+        var totalSizeBytes = Number(payload && payload.totalSizeBytes);
+        if (!isFinite(totalSizeBytes) || totalSizeBytes < 0) {
+            totalSizeBytes = Number(existingSummary.totalSizeBytes);
+        }
+        if (!isFinite(totalSizeBytes) || totalSizeBytes < 0) {
+            totalSizeBytes = files.reduce(function (sum, fileInfo) {
+                var value = Number(fileInfo && fileInfo.size ? fileInfo.size : 0);
+                return sum + (isNaN(value) ? 0 : value);
+            }, 0);
+        }
+
+        return {
+            mode: 'summary',
+            fileCount: fileCount,
+            totalSizeBytes: totalSizeBytes,
+            sampleLimit: STORED_FILE_SAMPLE_LIMIT,
+            sampleFiles: sampleFiles,
+            omittedFileCount: Math.max(0, fileCount - sampleFiles.length)
+        };
+    }
+
+    function buildStoredMetadataPayload(payload) {
+        if (!payload || typeof payload !== 'object') {
+            return payload;
+        }
+
+        var summary = buildUploadSummary(payload);
+        var girder = payload.girder && typeof payload.girder === 'object' ? payload.girder : {};
+        return {
+            version: payload.version || 1,
+            encoding: 'summary-v1',
+            uploadedAt: payload.uploadedAt || null,
+            uploadedFiles: summary.sampleFiles,
+            uploadSummary: summary,
+            totalSizeBytes: summary.totalSizeBytes,
+            uploadState: payload.uploadState || null,
+            girder: {
+                baseUrl: girder.baseUrl || null,
+                parentFolderId: girder.parentFolderId || null,
+                parentFolderUrl: girder.parentFolderUrl || buildFolderUrl(girder)
+            }
+        };
     }
 
     function isCompletedPayload(payload) {
@@ -715,11 +794,19 @@
         var isFailed = uploadStatus === 'failed';
         var uploadedAt = payload.uploadedAt || 'Unknown';
         var uploadedFiles = Array.isArray(payload.uploadedFiles) ? payload.uploadedFiles : [];
-        var fileCount = uploadedFiles.length;
+        var summary = payload.uploadSummary && typeof payload.uploadSummary === 'object' ? payload.uploadSummary : {};
+        var fileCount = Number(summary.fileCount);
+        if (!isFinite(fileCount) || fileCount < uploadedFiles.length) {
+            fileCount = uploadedFiles.length;
+        }
+        var firstUploadedFile = uploadedFiles.length ? uploadedFiles[0] : {};
         var displayName = fileCount === 1
-            ? (uploadedFiles[0].name || uploadedFiles[0].originalName || 'Unknown file')
+            ? (firstUploadedFile.name || firstUploadedFile.originalName || 'Unknown file')
             : (fileCount + ' files');
         var totalSizeBytes = Number(payload.totalSizeBytes);
+        if (!isFinite(totalSizeBytes) || totalSizeBytes < 0) {
+            totalSizeBytes = Number(summary.totalSizeBytes);
+        }
         if (!isFinite(totalSizeBytes) || totalSizeBytes < 0) {
             totalSizeBytes = uploadedFiles.reduce(function (sum, fileInfo) {
                 var value = Number(fileInfo && fileInfo.size ? fileInfo.size : 0);
@@ -744,7 +831,7 @@
         var nameLine = fileCount === 1
             ? '<div><strong>Name:</strong> ' + escapeHtml(displayName) + '</div>'
             : '';
-        var lastItemLine = isFailed
+        var lastItemLine = isFailed && itemId !== 'n/a'
             ? '<div><strong>Last item ID:</strong> ' + escapeHtml(itemId) + '</div>'
             : '';
         var lastSyncedLine = payload.uploadState && payload.uploadState.syncedAt
@@ -799,7 +886,7 @@
     }
 
     async function persistMetadata(textarea, payload, shouldBackgroundSave) {
-        setFieldValue(textarea, JSON.stringify(payload));
+        setFieldValue(textarea, JSON.stringify(buildStoredMetadataPayload(payload)));
         if (!shouldBackgroundSave) {
             return;
         }
@@ -938,7 +1025,7 @@
                 refreshed.metadata.uploadState = refreshed.metadata.uploadState || {};
                 refreshed.metadata.uploadState.syncedAt = new Date().toISOString();
                 updateInfoState(refreshed.metadata);
-                setFieldValue(textarea, JSON.stringify(currentMetadata));
+                setFieldValue(textarea, JSON.stringify(buildStoredMetadataPayload(currentMetadata)));
                 progressBar.style.width = '100%';
                 switchToInfoOnlyMode();
                 if (actionsAllowed) {
@@ -1048,11 +1135,13 @@
                     girder: {}
                 };
                 if (files.length > 1) {
+                    statusLine.textContent = 'Saving upload summary...';
                     await persistMetadata(textarea, pendingPayload, true);
                 }
 
                 var uploadedFiles = [];
                 var totalFiles = files.length;
+                statusLine.textContent = 'Préparation des dossiers de réception...';
                 var batchResponse = await moduleAjax('init-batch', {
                     fieldName: fieldName,
                     files: files.map(function (file) {
@@ -1156,6 +1245,7 @@
                     },
                     girder: pendingPayload.girder
                 };
+                finalMetadata.uploadSummary = buildUploadSummary(finalMetadata);
 
                 await persistMetadata(textarea, finalMetadata, true);
                 updateInfoState(finalMetadata);
@@ -1166,7 +1256,7 @@
                 debug('Upload completed', {
                     fieldName: fieldName,
                     itemId: finalMetadata.girder.itemId,
-                    fileCount: finalMetadata.uploadedFiles.length
+                    fileCount: finalMetadata.uploadSummary ? finalMetadata.uploadSummary.fileCount : finalMetadata.uploadedFiles.length
                 });
             } catch (error) {
                 statusLine.textContent = 'Upload failed: ' + error.message;
@@ -1200,6 +1290,7 @@
                         fileId: null
                     }
                 };
+                finalMetadata.uploadSummary = buildUploadSummary(finalMetadata);
                 await persistMetadata(textarea, finalMetadata, true);
                 updateInfoState(finalMetadata);
                 restoreUploadMode();
